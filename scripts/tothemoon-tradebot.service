@@ -1,0 +1,31 @@
+[Unit]
+Description=ToTheMoon Trading Bot - Scalping EUR Multi-Pairs
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/opt/toTheMoon_tradebot
+Environment=PATH=/opt/toTheMoon_tradebot/venv/bin
+ExecStart=/opt/toTheMoon_tradebot/venv/bin/python run.py
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=tothemoon-tradebot
+
+# Limites de sécurité
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/opt/toTheMoon_tradebot
+PrivateTmp=true
+
+# Variables d'environnement
+Environment="PYTHONPATH=/opt/toTheMoon_tradebot"
+Environment="PYTHONUNBUFFERED=1"
+
+[Install]
+WantedBy=multi-user.target

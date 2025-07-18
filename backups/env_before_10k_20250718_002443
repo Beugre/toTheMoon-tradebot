@@ -1,0 +1,60 @@
+# Configuration des variables d'environnement
+# Bot de Trading Scalping - ToTheMoon TradeBot
+
+# ===== BINANCE API =====
+BINANCE_API_KEY=WJ1dtkDCm6u4fvx19tzHNNHDazac4coFcN9N5jJPsPnFqEy5PNCbr3gxLPWLsb1k
+BINANCE_SECRET_KEY=MohlxqEVx92VNbOJ67dIem3atBX41hol9br72n0JD5t7npIqQWqINiGwdwLcLZmz
+BINANCE_TESTNET=False
+
+# ===== TELEGRAM BOT =====
+TELEGRAM_BOT_TOKEN=8117770827:AAHitB3fjxC0WIK4_BonLmXzmPa1vHCDZh4
+TELEGRAM_CHAT_ID=1181024836
+
+# ===== GOOGLE SHEETS =====
+GOOGLE_SHEETS_CREDENTIALS=credentials.json
+GOOGLE_SHEETS_SPREADSHEET_ID=17UAKuA7nuyXgYlYm85DprQiU-W6MA4BZALudGxouYEs
+ENABLE_GOOGLE_SHEETS=True
+
+# ===== CONFIGURATION BOT =====
+# Capital initial (optionnel - sera récupéré via API)
+INITIAL_CAPITAL=10000
+
+# Mode debug
+DEBUG=True
+
+# ===== PARAMÈTRES AVANCÉS =====
+# Objectif quotidien en % (défaut: 1.0)
+DAILY_TARGET_PERCENT=1.0
+
+# Stop loss quotidien en % (défaut: 1.0)
+DAILY_STOP_LOSS_PERCENT=1.0
+
+# Taille de position en % (défaut: 17.5)
+POSITION_SIZE_PERCENT=17.5
+
+# Nombre maximum de positions (défaut: 3)
+MAX_OPEN_POSITIONS=3
+
+# Stop loss par trade en % (défaut: 0.5)
+STOP_LOSS_PERCENT=0.5
+
+# Take profit par trade en % (défaut: 1.0)
+TAKE_PROFIT_PERCENT=1.0
+
+# Activation trailing stop en % (défaut: 0.5)
+TRAILING_ACTIVATION_PERCENT=0.5
+
+# Step trailing stop en % (défaut: 0.3)
+TRAILING_STEP_PERCENT=0.3
+
+# Volume minimum en EUR (défaut: 100000)
+MIN_VOLUME_EUR=100000
+
+# Spread maximum en % (défaut: 0.2)
+MAX_SPREAD_PERCENT=0.2
+
+# Intervalle de scan en secondes (défaut: 60)
+SCAN_INTERVAL=60
+
+# Timeframe des bougies (défaut: 1MINUTE)
+TIMEFRAME=1MINUTE
