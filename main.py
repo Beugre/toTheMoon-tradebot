@@ -489,6 +489,9 @@ class ScalpingBot:
                 self.logger.warning(f"⚠️ Valeur notionnelle trop faible pour {symbol}: {final_notional:.2f} EUR < 10 EUR")
                 return
             
+            # Capital avant trade (AVANT l'achat)
+            capital_before_trade = self.get_total_capital()
+            
             # Passage de l'ordre
             order = self.binance_client.order_market_buy(
                 symbol=symbol,
@@ -528,8 +531,10 @@ class ScalpingBot:
             
             # Log dans Google Sheets (si activé)
             if self.sheets_logger:
-                capital_before_trade = self.get_total_capital() + position_size  # Capital avant le trade
-                capital_after_trade = self.get_total_capital()  # Capital après le trade (diminué du montant investi)
+                # Capital après = EUR total + crypto existant APRÈS l'achat
+                capital_after_trade = self.get_total_capital()
+                
+                self.logger.info(f"📊 Google Sheets - Capital avant: {capital_before_trade:.2f} EUR, après: {capital_after_trade:.2f} EUR (différence: {capital_after_trade - capital_before_trade:+.2f} EUR)")
                 await self.sheets_logger.log_trade(trade, "OPEN", capital_before_trade, capital_after_trade)
             
             # Enregistrement en base de données
@@ -595,9 +600,10 @@ class ScalpingBot:
         return True
     
     def get_asset_exposure(self, base_asset: str) -> float:
-        """Calcule l'exposition actuelle sur un asset de base"""
+        """Calcule l'exposition actuelle sur un asset de base (positions ouvertes + soldes existants)"""
         total_exposure = 0.0
         
+        # 1. Exposition des positions ouvertes tracées par le bot
         for trade_id, trade in self.open_positions.items():
             if trade.pair.replace('EUR', '') == base_asset:
                 try:
@@ -606,10 +612,24 @@ class ScalpingBot:
                     position_value = trade.size * current_price
                     total_exposure += position_value
                 except Exception as e:
-                    self.logger.error(f"❌ Erreur calcul exposition {trade.pair}: {e}")
+                    self.logger.error(f"❌ Erreur calcul exposition position {trade.pair}: {e}")
                     # Fallback sur le prix d'entrée
                     position_value = trade.size * trade.entry_price
                     total_exposure += position_value
+        
+        # 2. Exposition des soldes crypto existants (CRITIQUE!)
+        try:
+            existing_balance = self.get_asset_balance(base_asset)
+            if existing_balance > 0.00001:  # Seuil pour éviter les poussières
+                symbol = base_asset + 'EUR'
+                ticker = self.binance_client.get_symbol_ticker(symbol=symbol)
+                current_price = float(ticker['price'])
+                existing_value = existing_balance * current_price
+                total_exposure += existing_value
+                
+                self.logger.debug(f"💎 Exposition {base_asset}: Positions ouvertes: {total_exposure - existing_value:.2f} EUR + Solde existant: {existing_value:.2f} EUR = Total: {total_exposure:.2f} EUR")
+        except Exception as e:
+            self.logger.error(f"❌ Erreur calcul exposition solde existant {base_asset}: {e}")
         
         return total_exposure
 
@@ -726,39 +746,39 @@ class ScalpingBot:
             return 0.0
 
     def get_total_capital(self) -> float:
-        """Calcule le capital total dynamique (EUR + valeur des cryptos ouvertes)"""
+        """Calcule le capital total dynamique (EUR + valeur de TOUTES les cryptos du compte)"""
         try:
             account_info = self.binance_client.get_account()
             total_capital = 0.0
             
             # Solde EUR
             eur_balance = 0.0
-            for balance in account_info['balances']:
-                if balance['asset'] == 'EUR':
-                    eur_balance = float(balance['free'])
-                    break
-            
-            total_capital += eur_balance
-            
-            # Valeur des cryptos en positions ouvertes (calcul précis)
             crypto_value = 0.0
-            for trade_id, trade in self.open_positions.items():
-                try:
-                    ticker = self.binance_client.get_symbol_ticker(symbol=trade.pair)
-                    current_price = float(ticker['price'])
-                    position_value = trade.size * current_price
-                    crypto_value += position_value
-                    self.logger.debug(f"💎 {trade.pair}: {trade.size:.6f} x {current_price:.4f} = {position_value:.2f} EUR")
-                except Exception as e:
-                    self.logger.error(f"❌ Erreur calcul valeur position {trade.pair}: {e}")
-                    # En cas d'erreur, on utilise la valeur d'entrée
-                    position_value = trade.size * trade.entry_price
-                    crypto_value += position_value
-                    self.logger.debug(f"💎 {trade.pair} (fallback): {trade.size:.6f} x {trade.entry_price:.4f} = {position_value:.2f} EUR")
             
-            total_capital += crypto_value
+            for balance in account_info['balances']:
+                free_balance = float(balance['free'])
+                asset = balance['asset']
+                
+                if free_balance > 0:
+                    if asset == 'EUR':
+                        eur_balance = free_balance
+                        total_capital += eur_balance
+                    elif free_balance > 0.00001:  # Seuil pour éviter les poussières
+                        # Conversion en EUR pour tous les autres assets
+                        try:
+                            symbol = asset + 'EUR'
+                            ticker = self.binance_client.get_symbol_ticker(symbol=symbol)
+                            price_eur = float(ticker['price'])
+                            value_eur = free_balance * price_eur
+                            crypto_value += value_eur
+                            total_capital += value_eur
+                            self.logger.debug(f"💎 {asset}: {free_balance:.8f} x {price_eur:.4f} = {value_eur:.2f} EUR")
+                        except Exception:
+                            # Si pas de paire EUR pour cet asset, on ignore
+                            self.logger.debug(f"⚠️ Pas de conversion EUR pour {asset}")
+                            continue
             
-            self.logger.debug(f"💰 Capital total: {total_capital:.2f} EUR (EUR libre: {eur_balance:.2f}, Crypto positions: {crypto_value:.2f})")
+            self.logger.debug(f"💰 Capital total: {total_capital:.2f} EUR (EUR libre: {eur_balance:.2f}, Toutes cryptos: {crypto_value:.2f})")
             return total_capital
             
         except Exception as e:
@@ -1200,42 +1220,135 @@ class ScalpingBot:
             self.logger.error(f"❌ Erreur enregistrement métriques temps réel: {e}")
     
     async def check_positions_consistency(self):
-        """Vérifie la cohérence entre les positions en mémoire et les soldes Binance"""
+        """Vérifie la cohérence entre les positions en mémoire et les soldes Binance + gère la surexposition"""
         try:
-            if not self.open_positions:
-                return
-            
             account_info = self.binance_client.get_account()
             balances = {b['asset']: float(b['free']) for b in account_info['balances']}
+            total_capital = self.get_total_capital()
+            max_exposure_per_asset = total_capital * self.config.MAX_EXPOSURE_PER_ASSET_PERCENT / 100
             
-            inconsistent_positions = []
-            
-            for symbol, trade in self.open_positions.items():
-                base_asset = symbol.replace('EUR', '')
-                available_balance = balances.get(base_asset, 0)
+            # 1. Vérification des incohérences de positions tracées
+            if self.open_positions:
+                inconsistent_positions = []
+                for trade_id, trade in self.open_positions.items():
+                    base_asset = trade.pair.replace('EUR', '')
+                    available_balance = balances.get(base_asset, 0)
+                    
+                    # Vérification si le solde est cohérent avec la position
+                    if available_balance < trade.size * 0.95:  # Tolérance de 5%
+                        inconsistent_positions.append({
+                            'trade_id': trade_id,
+                            'symbol': trade.pair,
+                            'expected': trade.size,
+                            'actual': available_balance,
+                            'difference': trade.size - available_balance
+                        })
                 
-                # Vérification si le solde est cohérent avec la position
-                if available_balance < trade.size * 0.95:  # Tolérance de 5%
-                    inconsistent_positions.append({
-                        'symbol': symbol,
-                        'expected': trade.size,
-                        'actual': available_balance,
-                        'difference': trade.size - available_balance
-                    })
+                if inconsistent_positions:
+                    self.logger.warning(f"⚠️ {len(inconsistent_positions)} positions incohérentes détectées:")
+                    for pos in inconsistent_positions:
+                        self.logger.warning(f"   {pos['symbol']}: attendu {pos['expected']:.8f}, réel {pos['actual']:.8f} (diff: {pos['difference']:.8f})")
             
-            if inconsistent_positions:
-                self.logger.warning(f"⚠️ {len(inconsistent_positions)} positions incohérentes détectées:")
-                for pos in inconsistent_positions:
-                    self.logger.warning(f"   {pos['symbol']}: attendu {pos['expected']:.8f}, réel {pos['actual']:.8f} (diff: {pos['difference']:.8f})")
+            # 2. VÉRIFICATION CRITIQUE : Surexposition sur soldes existants
+            overexposed_assets = []
+            for asset, balance in balances.items():
+                if asset == 'EUR' or balance <= 0.00001:
+                    continue
+                    
+                try:
+                    # Calcul exposition actuelle de cet asset
+                    current_exposure = self.get_asset_exposure(asset)
+                    
+                    if current_exposure > max_exposure_per_asset:
+                        overexposed_assets.append({
+                            'asset': asset,
+                            'current_exposure': current_exposure,
+                            'max_allowed': max_exposure_per_asset,
+                            'excess_eur': current_exposure - max_exposure_per_asset,
+                            'balance': balance
+                        })
+                        
+                except Exception as e:
+                    self.logger.debug(f"⚠️ Impossible de vérifier exposition {asset}: {e}")
+                    continue
+            
+            # 3. CORRECTION AUTOMATIQUE des surexpositions
+            if overexposed_assets:
+                self.logger.warning(f"🚨 SUREXPOSITION DÉTECTÉE sur {len(overexposed_assets)} asset(s)!")
                 
-                # Auto-correction si l'écart est important
-                for pos in inconsistent_positions:
-                    if pos['difference'] > pos['expected'] * 0.5:  # Plus de 50% d'écart
-                        self.logger.warning(f"🔧 Auto-correction de {pos['symbol']}")
-                        ticker = self.binance_client.get_symbol_ticker(symbol=pos['symbol'])
+                for asset_info in overexposed_assets:
+                    asset = asset_info['asset']
+                    excess_eur = asset_info['excess_eur']
+                    current_exposure = asset_info['current_exposure']
+                    max_allowed = asset_info['max_allowed']
+                    
+                    self.logger.warning(f"   🔥 {asset}: {current_exposure:.2f} EUR > {max_allowed:.2f} EUR (excès: {excess_eur:.2f} EUR)")
+                    
+                    # Calculer quelle quantité vendre pour revenir dans la limite
+                    try:
+                        symbol = asset + 'EUR'
+                        ticker = self.binance_client.get_symbol_ticker(symbol=symbol)
                         current_price = float(ticker['price'])
-                        await self.close_position_virtually(pos['symbol'], current_price, "AUTO_CORRECTION")
+                        
+                        # Quantité à vendre = excès en EUR / prix actuel
+                        quantity_to_sell = excess_eur / current_price
+                        balance = asset_info['balance']
+                        
+                        # Ne pas vendre plus que ce qu'on a
+                        if quantity_to_sell > balance:
+                            quantity_to_sell = balance * 0.95  # Marge de sécurité
+                        
+                        # Arrondir selon les règles de la paire
+                        quantity_to_sell = self.round_quantity(symbol, quantity_to_sell)
+                        
+                        if quantity_to_sell > 0:
+                            self.logger.warning(f"   🔧 VENTE FORCÉE {asset}: {quantity_to_sell:.8f} ({quantity_to_sell * current_price:.2f} EUR)")
+                            
+                            # Exécuter la vente d'urgence
+                            try:
+                                order = self.binance_client.order_market_sell(
+                                    symbol=symbol,
+                                    quantity=quantity_to_sell
+                                )
+                                
+                                self.logger.info(f"✅ SUREXPOSITION CORRIGÉE: Vendu {quantity_to_sell:.8f} {asset} pour {quantity_to_sell * current_price:.2f} EUR")
+                                
+                                # Notification Telegram d'urgence
+                                message = f"🚨 CORRECTION SUREXPOSITION\n"
+                                message += f"Asset: {asset}\n"
+                                message += f"Vendu: {quantity_to_sell:.8f} ({quantity_to_sell * current_price:.2f} EUR)\n"
+                                message += f"Exposition avant: {current_exposure:.2f} EUR\n"
+                                message += f"Limite: {max_allowed:.2f} EUR"
+                                
+                                await self.telegram_notifier.send_message(message)
+                                
+                            except Exception as e:
+                                self.logger.error(f"❌ ÉCHEC vente forcée {asset}: {e}")
+                                
+                    except Exception as e:
+                        self.logger.error(f"❌ Erreur calcul vente forcée {asset}: {e}")
             
+            # 4. Détection de soldes non tracés (positions fantômes inverses)
+            for asset, balance in balances.items():
+                if asset == 'EUR' or balance <= 0.001:
+                    continue
+                    
+                # Vérifier si on a un solde significatif sans position tracée
+                has_tracked_position = any(trade.pair.replace('EUR', '') == asset for trade in self.open_positions.values())
+                
+                if not has_tracked_position and balance > 0.001:
+                    try:
+                        symbol = asset + 'EUR'
+                        ticker = self.binance_client.get_symbol_ticker(symbol=symbol)
+                        current_price = float(ticker['price'])
+                        value_eur = balance * current_price
+                        
+                        if value_eur > 100:  # Seuil significatif
+                            self.logger.warning(f"⚠️ Incohérence détectée: {asset} balance={balance:.6f} mais 0 positions en mémoire")
+                            
+                    except Exception:
+                        pass
+                        
         except Exception as e:
             self.logger.error(f"❌ Erreur vérification cohérence positions: {e}")
 
