@@ -817,16 +817,30 @@ class ScalpingBot:
                     # Mise à jour du trailing stop
                     new_stop = current_price * (1 - self.config.TRAILING_STEP_PERCENT / 100)
                     if new_stop > trade.stop_loss:
+                        old_stop = trade.stop_loss
+                        old_tp = trade.take_profit
+                        
+                        # Mise à jour du Stop Loss
                         trade.stop_loss = new_stop
-                        self.logger.info(f"📈 Trailing Stop mis à jour pour {trade.pair}: {new_stop:.4f} EUR")
+                        
+                        # Mise à jour du Take Profit pour qu'il suive la progression
+                        # Nouveau TP = prix actuel + même écart relatif que le TP initial
+                        new_take_profit = current_price * (1 + self.config.TAKE_PROFIT_PERCENT / 100)
+                        trade.take_profit = new_take_profit
+                        
+                        self.logger.info(f"📈 Trailing Stop mis à jour pour {trade.pair}:")
+                        self.logger.info(f"   🛑 Nouveau SL: {new_stop:.4f} EUR (ancien: {old_stop:.4f})")
+                        self.logger.info(f"   🎯 Nouveau TP: {new_take_profit:.4f} EUR (ancien: {old_tp:.4f})")
 
                         # Enregistrement en base de données
                         try:
                             trailing_data = {
                                 'trade_id': trade.db_id,
                                 'symbol': trade.pair,
-                                'old_stop_loss': trade.stop_loss,
+                                'old_stop_loss': old_stop,
                                 'new_stop_loss': new_stop,
+                                'old_take_profit': old_tp,
+                                'new_take_profit': new_take_profit,
                                 'trigger_price': current_price,
                                 'timestamp': datetime.now(),
                                 'profit_percent': (current_price - trade.entry_price) / trade.entry_price * 100
