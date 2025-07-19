@@ -18,7 +18,7 @@ class TradingConfig:
     # Paramètres de capital
     DAILY_TARGET_PERCENT: float = 1.0  # Objectif quotidien +1%
     DAILY_STOP_LOSS_PERCENT: float = 2.0  # Stop loss quotidien étendu pour capital élevé
-    POSITION_SIZE_PERCENT: float = 12.0  # Plus conservateur avec capital important
+    BASE_POSITION_SIZE_PERCENT: float = 12.0  # Taille de base (sera ajustée selon volatilité)
     
     # Paramètres de position - Configuration optimisée post-perte
     MAX_OPEN_POSITIONS: int = 5  # Plus d'opportunités simultanées
