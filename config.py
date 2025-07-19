@@ -20,21 +20,31 @@ class TradingConfig:
     DAILY_STOP_LOSS_PERCENT: float = 2.0  # Stop loss quotidien étendu pour capital élevé
     POSITION_SIZE_PERCENT: float = 12.0  # Plus conservateur avec capital important
     
-    # Paramètres de position
+    # Paramètres de position - Configuration optimisée post-perte
     MAX_OPEN_POSITIONS: int = 5  # Plus d'opportunités simultanées
-    STOP_LOSS_PERCENT: float = 0.35  # SL plus serré
-    TAKE_PROFIT_PERCENT: float = 0.7  # TP plus conservateur mais réalisable
-    TRAILING_ACTIVATION_PERCENT: float = 0.4  # Activation trailing plus tôt
-    TRAILING_STEP_PERCENT: float = 0.25  # Step trailing plus fin
+    MAX_TRADES_PER_PAIR: int = 2  # Limite par paire pour éviter surlevier caché
+    STOP_LOSS_PERCENT: float = 0.25  # SL plus serré pour limiter pertes
+    TAKE_PROFIT_PERCENT: float = 0.8  # TP légèrement plus conservateur
+    TRAILING_ACTIVATION_PERCENT: float = 0.1  # Activation trailing dès 0.1%
+    TRAILING_STEP_PERCENT: float = 0.2  # Step trailing plus fin
     
-    # Paramètres de timeout
-    TRADE_TIMEOUT_MINUTES: int = 15
+    # Paramètres de timeout adaptatifs
+    TRADE_TIMEOUT_LOW_VOLATILITY: int = 20  # Timeout si volatilité faible
+    TRADE_TIMEOUT_HIGH_VOLATILITY: int = 30  # Timeout si volatilité forte
+    MIN_TIMEOUT_PROFIT_RANGE: tuple = (-0.2, 0.2)  # Range P&L pour timeout
     MIN_PROFIT_BEFORE_TIMEOUT: float = 0.1  # Sortie plus rapide si petit profit
     
-    # Paramètres de sélection des paires
+    # Paramètres de sélection des paires - Critères renforcés
     MIN_VOLUME_EUR: float = 100000  # Volume minimum 100k EUR
     MAX_SPREAD_PERCENT: float = 0.15  # Spread plus strict pour capital élevé
     MAX_PAIRS_TO_ANALYZE: int = 5  # Top 5 paires à analyser
+    MIN_VOLATILITY_1H_PERCENT: float = 0.5  # Volatilité minimum 1h requise
+    
+    # Position sizing adaptatif
+    BASE_POSITION_SIZE_PERCENT: float = 12.0  # Taille de base
+    VOLATILITY_REDUCTION_FACTOR: float = 0.5  # Réduction si volatilité élevée
+    HIGH_VOLATILITY_THRESHOLD: float = 3.0  # Seuil volatilité élevée (%)
+    LOW_VOLATILITY_THRESHOLD: float = 1.0   # Seuil volatilité faible (%)
     
     # Paramètres de timing
     SCAN_INTERVAL: int = 40  # Scan plus fréquent pour capital élevé

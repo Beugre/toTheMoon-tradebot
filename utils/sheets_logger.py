@@ -196,8 +196,8 @@ class SheetsLogger:
             "textFormat": {"bold": True, "fontSize": 14, "foregroundColor": {"red": 1, "green": 1, "blue": 1}}
         })
 
-    async def log_trade(self, trade, action: str):
-        """Log un trade dans Google Sheets"""
+    async def log_trade(self, trade, action: str, capital_before: float = 0, capital_after: float = 0):
+        """Log un trade dans Google Sheets avec capital avant/après"""
         if not self.client:
             self.logger.warning("⚠️ Google Sheets non initialisé - trade non loggé")
             return
@@ -206,7 +206,7 @@ class SheetsLogger:
             trades_sheet = self.spreadsheet.worksheet("Trades") # type: ignore
             
             if action == "OPEN":
-                # Log d'ouverture
+                # Log d'ouverture avec capital avant et après
                 row = [
                     trade.timestamp.strftime("%Y-%m-%d"),
                     trade.timestamp.strftime("%H:%M:%S"),
@@ -214,28 +214,30 @@ class SheetsLogger:
                     trade.direction.value,
                     trade.size,
                     trade.entry_price,
-                    "",  # Prix sortie vide
+                    "",  # Prix sortie vide pour l'ouverture
                     trade.stop_loss,
                     trade.take_profit,
-                    "",  # P&L vide
-                    "",  # P&L % vide
-                    "",  # Durée vide
-                    "",  # Raison sortie vide
-                    "",  # Capital avant
-                    ""   # Capital après
+                    "",  # P&L vide pour l'ouverture
+                    "",  # P&L % vide pour l'ouverture
+                    "",  # Durée vide pour l'ouverture
+                    "OUVERT",  # Statut ouvert
+                    capital_before,  # Capital avant le trade
+                    capital_after   # Capital après le trade (capital engagé dans la position)
                 ]
                 trades_sheet.append_row(row) # type: ignore
+                self.logger.debug(f"📊 Trade OPEN loggé: {trade.pair} (Capital: {capital_before:.2f} -> {capital_after:.2f})")
             
-            elif action == "CLOSE" or action == "CLOSE_VIRTUAL":
+            elif action in ["CLOSE", "CLOSE_VIRTUAL"]:
                 # Mise à jour du trade existant
-                # Recherche de la ligne du trade
                 all_values = trades_sheet.get_all_values()
                 
                 for i, row in enumerate(all_values[1:], 2):  # Skip header
-                    if (row[1] == trade.timestamp.strftime("%H:%M:%S") and 
+                    # Chercher le trade correspondant (par heure et paire)
+                    if (len(row) >= 3 and 
+                        row[1] == trade.timestamp.strftime("%H:%M:%S") and 
                         row[2] == trade.pair):
                         
-                        # Mise à jour de la ligne
+                        # Récupération des valeurs du trade
                         exit_price = getattr(trade, 'exit_price', 0)
                         pnl = getattr(trade, 'pnl', 0)
                         exit_reason = getattr(trade, 'exit_reason', action)
@@ -245,21 +247,25 @@ class SheetsLogger:
                         if trade.entry_price > 0 and exit_price > 0:
                             pnl_percent = (exit_price - trade.entry_price) / trade.entry_price * 100
                         
-                        # Mise à jour par batch plutôt qu'individuellement
-                        range_name = f"G{i}:M{i}"
+                        # Mise à jour de toute la ligne avec toutes les colonnes
+                        range_name = f"G{i}:O{i}"
                         values = [[
-                            exit_price,
-                            "", "", # Colonnes H et I vides
-                            pnl,
-                            pnl_percent,
-                            str(duration),
-                            exit_reason
+                            exit_price,           # G: Prix sortie
+                            trade.stop_loss,      # H: Stop Loss (peut avoir changé avec trailing)
+                            trade.take_profit,    # I: Take Profit
+                            pnl,                  # J: P&L EUR
+                            pnl_percent,          # K: P&L %
+                            str(duration),        # L: Durée
+                            exit_reason,          # M: Raison sortie
+                            capital_before,       # N: Capital avant (si fourni)
+                            capital_after         # O: Capital après
                         ]]
                         
                         trades_sheet.update(range_name, values)
+                        self.logger.debug(f"📊 Trade CLOSE mis à jour: {trade.pair}")
                         break
                 else:
-                    # Trade non trouvé, ajouter une nouvelle ligne
+                    # Trade non trouvé, ajouter une nouvelle ligne complète
                     exit_price = getattr(trade, 'exit_price', 0)
                     pnl = getattr(trade, 'pnl', 0)
                     exit_reason = getattr(trade, 'exit_reason', action)
@@ -283,10 +289,14 @@ class SheetsLogger:
                         pnl_percent,
                         str(duration),
                         exit_reason,
-                        "",  # Capital avant
-                        ""   # Capital après
+                        capital_before,  # Capital avant
+                        capital_after    # Capital après
                     ]
                     trades_sheet.append_row(row)
+                    self.logger.debug(f"📊 Trade CLOSE complet ajouté: {trade.pair}")
+            
+        except Exception as e:
+            self.logger.error(f"❌ Erreur logging trade {action}: {e}")
             
             self.logger.info(f"📊 Trade {action} loggé dans Google Sheets - {trade.pair}")
             

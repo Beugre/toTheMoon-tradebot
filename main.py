@@ -224,7 +224,7 @@ class ScalpingBot:
             self.start_capital = total_capital
             self.current_capital = total_capital
             self.logger.info(f"💰 Capital initial total: {self.start_capital:.2f} EUR (EUR: {eur_balance:.2f}, Crypto: {crypto_value:.2f})")
-            self.logger.info(f"📊 Taille de position configurée: {self.config.POSITION_SIZE_PERCENT}% = {self.calculate_position_size():.2f} EUR")
+            self.logger.info(f"📊 Taille de position configurée: {self.config.BASE_POSITION_SIZE_PERCENT}% = {self.calculate_position_size():.2f} EUR")
         except Exception as e:
             self.logger.error(f"❌ Erreur initialisation capital: {e}")
             raise
@@ -424,8 +424,13 @@ class ScalpingBot:
     async def execute_trade(self, symbol: str, direction: TradeDirection):
         """Exécute un trade"""
         try:
-            # Vérifications avant entrée
-            if not self.can_open_position(symbol):
+            # Calculer la volatilité pour cette paire
+            volatility = self.calculate_volatility_1h(symbol)
+            
+            # Vérifications avant entrée avec nouveaux critères
+            can_open, reason = self.can_open_position_enhanced(symbol, volatility)
+            if not can_open:
+                self.logger.info(f"❌ Trade {symbol} refusé: {reason}")
                 return
             
             # Informations d'allocation avant trade
@@ -434,13 +439,13 @@ class ScalpingBot:
             base_asset = symbol.replace('EUR', '')
             current_exposure = self.get_asset_exposure(base_asset)
             
-            # Calcul de la taille de position
-            position_size = self.calculate_position_size()
+            # Calcul de la taille de position avec sizing adaptatif
+            position_size = self.calculate_position_size(symbol, volatility)
             
             self.logger.info(f"💰 Allocation avant trade {symbol}:")
             self.logger.info(f"   📊 Capital total: {total_capital:.2f} EUR")
             self.logger.info(f"   💶 EUR disponible: {eur_balance:.2f} EUR")
-            self.logger.info(f"   🎯 Taille position: {position_size:.2f} EUR ({self.config.POSITION_SIZE_PERCENT}% du total)")
+            self.logger.info(f"   🎯 Taille position: {position_size:.2f} EUR (volatilité: {volatility:.2f}%)")
             self.logger.info(f"   📈 Exposition {base_asset} actuelle: {current_exposure:.2f} EUR")
             self.logger.info(f"   🏦 Positions ouvertes: {len(self.open_positions)}")
             
@@ -517,7 +522,9 @@ class ScalpingBot:
             
             # Log dans Google Sheets (si activé)
             if self.sheets_logger:
-                await self.sheets_logger.log_trade(trade, "OPEN")
+                capital_before_trade = self.get_total_capital() + position_size  # Capital avant le trade
+                capital_after_trade = self.get_total_capital()  # Capital après le trade (diminué du montant investi)
+                await self.sheets_logger.log_trade(trade, "OPEN", capital_before_trade, capital_after_trade)
             
             # Enregistrement en base de données
             try:
@@ -599,10 +606,30 @@ class ScalpingBot:
         
         return total_exposure
 
-    def calculate_position_size(self) -> float:
-        """Calcule la taille de position (15-20% du capital total dynamique)"""
+    def calculate_position_size(self, pair: Optional[str] = None, volatility: Optional[float] = None) -> float:
+        """Calcule la taille de position avec sizing adaptatif basé sur la volatilité"""
         total_capital = self.get_total_capital()
-        return total_capital * self.config.POSITION_SIZE_PERCENT / 100
+        base_size = total_capital * self.config.BASE_POSITION_SIZE_PERCENT / 100
+        
+        # Si pas de volatilité fournie, utiliser la taille de base
+        if volatility is None:
+            return base_size
+        
+        # Position sizing adaptatif selon la volatilité
+        if volatility > self.config.HIGH_VOLATILITY_THRESHOLD:
+            # Réduire la taille pour paires très volatiles
+            reduction_factor = min(0.5, self.config.VOLATILITY_REDUCTION_FACTOR * (volatility / self.config.HIGH_VOLATILITY_THRESHOLD))
+            adjusted_size = base_size * (1 - reduction_factor)
+            self.logger.info(f"📊 Position réduite pour {pair} (volatilité {volatility:.2f}%): {adjusted_size:.2f} EUR")
+            return adjusted_size
+        elif volatility < self.config.LOW_VOLATILITY_THRESHOLD:
+            # Augmenter légèrement pour paires peu volatiles (plus sûres)
+            adjusted_size = base_size * 1.1
+            self.logger.info(f"📊 Position augmentée pour {pair} (faible volatilité {volatility:.2f}%): {adjusted_size:.2f} EUR")
+            return adjusted_size
+        else:
+            # Volatilité normale, taille de base
+            return base_size
 
     def round_quantity(self, symbol: str, quantity: float) -> float:
         """Arrondit la quantité selon les règles de la paire"""
@@ -752,11 +779,13 @@ class ScalpingBot:
                     await self.close_position(symbol, current_price, "SUREXPOSITION_AUTO")
                     continue
 
-                # Vérification timeout (15 minutes)
-                if datetime.now() - trade.timestamp > timedelta(minutes=15):
-                    if pnl_percent < 0.2:  # Moins de +0.2%
-                        await self.close_position(symbol, current_price, "TIMEOUT")
-                        continue
+                # Vérification timeout adaptatif
+                volatility = self.calculate_volatility_1h(symbol)
+                should_timeout, timeout_reason = self.should_timeout_position(trade, current_price, volatility)
+                if should_timeout:
+                    self.logger.info(f"⏱️ {timeout_reason}")
+                    await self.close_position(symbol, current_price, timeout_reason)
+                    continue
 
                 # Vérification Stop Loss
                 if current_price <= trade.stop_loss:
@@ -934,7 +963,8 @@ class ScalpingBot:
             
             # Log dans Google Sheets (si activé)
             if self.sheets_logger:
-                await self.sheets_logger.log_trade(trade, "CLOSE")
+                capital_before_close = total_capital - pnl_amount  # Capital avant fermeture
+                await self.sheets_logger.log_trade(trade, "CLOSE", capital_before_close, total_capital)
             
             # Mise à jour en base de données
             if trade.db_id:
@@ -997,7 +1027,8 @@ class ScalpingBot:
             
             # Log dans Google Sheets (si activé) avec mention spéciale
             if self.sheets_logger:
-                await self.sheets_logger.log_trade(trade, "CLOSE_VIRTUAL")
+                capital_before_virtual = total_capital - pnl_amount  # Capital avant fermeture virtuelle
+                await self.sheets_logger.log_trade(trade, "CLOSE_VIRTUAL", capital_before_virtual, total_capital)
             
             # Mise à jour en base de données
             if trade.db_id:
@@ -1175,3 +1206,79 @@ class ScalpingBot:
             
         except Exception as e:
             self.logger.error(f"❌ Erreur vérification cohérence positions: {e}")
+
+    def calculate_volatility_1h(self, symbol: str) -> float:
+        """
+        Calcule la volatilité sur les 12 dernières heures pour une paire.
+        Méthode : variation max-min sur prix moyen (en %).
+        """
+        try:
+            # Récupérer les données horaires (sur 12 heures pour une meilleure moyenne)
+            klines = self.binance_client.get_historical_klines(
+                symbol, "1h", "12 hours ago UTC"
+            )
+
+            if len(klines) < 2:
+                return 0.0
+
+            # Extraire les prix de clôture
+            prices = [float(kline[4]) for kline in klines]
+
+            if len(prices) >= 2:
+                max_price = max(prices)
+                min_price = min(prices)
+                avg_price = sum(prices) / len(prices)
+
+                if avg_price > 0:
+                    volatility = ((max_price - min_price) / avg_price) * 100
+                    self.logger.debug(f"📊 Volatilité 12h {symbol}: {volatility:.2f}%")
+                    return volatility
+                else:
+                    return 0.0
+
+            return 0.0
+
+        except Exception as e:
+            self.logger.error(f"❌ Erreur calcul volatilité 12h {symbol}: {e}")
+            return 0.0
+
+    def count_trades_per_pair(self, symbol: str) -> int:
+        """Compte le nombre de trades ouverts pour une paire"""
+        return len([trade for trade_symbol, trade in self.open_positions.items() 
+                   if trade_symbol == symbol])
+
+    def can_open_position_enhanced(self, symbol: str, volatility: float) -> tuple[bool, str]:
+        """Vérifie si on peut ouvrir une position selon les nouvelles règles"""
+        # 1. Vérifier limite trades par paire
+        current_trades = self.count_trades_per_pair(symbol)
+        if current_trades >= self.config.MAX_TRADES_PER_PAIR:
+            return False, f"Limite trades par paire atteinte ({current_trades}/{self.config.MAX_TRADES_PER_PAIR})"
+        
+        # 2. Vérifier volatilité minimum
+        if volatility < self.config.MIN_VOLATILITY_1H_PERCENT:
+            return False, f"Volatilité insuffisante ({volatility:.2f}% < {self.config.MIN_VOLATILITY_1H_PERCENT}%)"
+        
+        # 3. Vérifier nombre total de positions
+        if len(self.open_positions) >= self.config.MAX_OPEN_POSITIONS:
+            return False, f"Limite positions totales atteinte ({len(self.open_positions)}/{self.config.MAX_OPEN_POSITIONS})"
+        
+        return True, "OK"
+
+    def should_timeout_position(self, trade: Trade, current_price: float, volatility: float) -> tuple[bool, str]:
+        """Détermine si une position doit être fermée par timeout selon les nouveaux critères"""
+        # Calcul durée et P&L
+        duration_minutes = (datetime.now() - trade.timestamp).total_seconds() / 60
+        pnl_percent = (current_price - trade.entry_price) / trade.entry_price * 100
+        
+        # Déterminer timeout selon volatilité
+        timeout_threshold = self.config.TRADE_TIMEOUT_LOW_VOLATILITY if volatility < 2.0 else self.config.TRADE_TIMEOUT_HIGH_VOLATILITY
+        
+        # Vérifier conditions de timeout
+        if duration_minutes > timeout_threshold:
+            # P&L dans la zone de timeout
+            min_range, max_range = self.config.MIN_TIMEOUT_PROFIT_RANGE
+            if min_range <= pnl_percent <= max_range:
+                # TODO: Vérifier indicateurs techniques (MACD, RSI neutres)
+                return True, f"TIMEOUT_ADAPTATIF ({duration_minutes:.0f}min, P&L:{pnl_percent:+.2f}%)"
+        
+        return False, ""
