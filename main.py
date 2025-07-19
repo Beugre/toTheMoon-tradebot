@@ -115,7 +115,7 @@ class ScalpingBot:
         self.is_running = False
         self.daily_pnl = 0.0
         self.daily_trades = 0
-        self.open_positions: Dict[str, Trade] = {}
+        self.open_positions: Dict[str, Trade] = {}  # Une position par ID unique
         self.start_capital = 0.0
         self.current_capital = 0.0
         self.daily_target_reached = False
@@ -155,14 +155,15 @@ class ScalpingBot:
         """Détecte les positions fantômes (positions ouvertes sans solde correspondant)"""
         phantom_positions = []
         
-        for symbol, trade in self.open_positions.items():
+        for trade_id, trade in self.open_positions.items():
+            symbol = trade.pair
             try:
                 base_asset = symbol.replace('EUR', '')
                 available_balance = self.get_asset_balance(base_asset)
                 
                 # Position fantôme si solde pratiquement nul mais position ouverte
-                if available_balance < 0.00001 and trade.size > 0.001:
-                    phantom_positions.append(symbol)
+                if available_balance < self.config.PHANTOM_POSITION_THRESHOLD and trade.size > 0.001:
+                    phantom_positions.append(trade_id)
                     self.logger.warning(f"👻 Position fantôme détectée: {symbol}")
                     self.logger.warning(f"   Position size: {trade.size:.8f} {base_asset}")
                     self.logger.warning(f"   Solde disponible: {available_balance:.8f} {base_asset}")
@@ -179,14 +180,16 @@ class ScalpingBot:
         if phantom_positions:
             self.logger.info(f"🧹 Nettoyage de {len(phantom_positions)} position(s) fantôme(s)")
             
-            for symbol in phantom_positions:
+            for trade_id in phantom_positions:
                 try:
+                    trade = self.open_positions[trade_id]
+                    symbol = trade.pair
                     ticker = self.binance_client.get_symbol_ticker(symbol=symbol)
                     current_price = float(ticker['price'])
-                    await self.close_position_virtually(symbol, current_price, "PHANTOM_CLEANUP")
+                    await self.close_position_virtually(trade_id, current_price, "PHANTOM_CLEANUP")
                     
                 except Exception as e:
-                    self.logger.error(f"❌ Erreur nettoyage position fantôme {symbol}: {e}")
+                    self.logger.error(f"❌ Erreur nettoyage position fantôme {trade_id}: {e}")
                     
         return len(phantom_positions)
 
@@ -392,12 +395,14 @@ class ScalpingBot:
                     signal_score += 1
                     conditions.append("MACD > Signal")
             
-            # RSI
-            rsi = talib.RSI(df['close'], timeperiod=14) # type: ignore
-            if not np.isnan(rsi.iloc[-1]):
-                if rsi.iloc[-1] < 40:
+            # RSI - Détection de rebond confirmé
+            rsi = talib.RSI(df['close'], timeperiod=self.config.RSI_PERIOD) # type: ignore
+            if not np.isnan(rsi.iloc[-1]) and not np.isnan(rsi.iloc[-2]):
+                # Rebond confirmé : RSI était en survente et remonte
+                if (rsi.iloc[-2] < self.config.RSI_OVERSOLD_LEVEL and 
+                    rsi.iloc[-1] > self.config.RSI_BOUNCE_CONFIRM_LEVEL):
                     signal_score += 1
-                    conditions.append(f"RSI < 40 ({rsi.iloc[-1]:.1f})")
+                    conditions.append(f"RSI rebond confirmé ({rsi.iloc[-2]:.1f} -> {rsi.iloc[-1]:.1f})")
             
             # Bollinger Bands
             bb_upper, bb_middle, bb_lower = talib.BBANDS(df['close'], timeperiod=20, nbdevup=2, nbdevdn=2) # type: ignore
@@ -503,8 +508,9 @@ class ScalpingBot:
                 timestamp=datetime.now()
             )
             
-            # Ajout aux positions ouvertes
-            self.open_positions[symbol] = trade
+            # Ajout aux positions ouvertes avec ID unique
+            trade_id = f"{symbol}_{trade.id}_{int(datetime.now().timestamp())}"
+            self.open_positions[trade_id] = trade
             
             # Mise à jour du capital
             self.current_capital -= position_size
@@ -560,8 +566,9 @@ class ScalpingBot:
             return False
         
         # Vérification position déjà ouverte sur la paire
-        if symbol in self.open_positions:
-            self.logger.debug(f"❌ Position déjà ouverte sur {symbol}")
+        trades_on_pair = [trade for trade_id, trade in self.open_positions.items() if trade.pair == symbol]
+        if len(trades_on_pair) >= self.config.MAX_TRADES_PER_PAIR:
+            self.logger.debug(f"❌ Limite trades par paire atteinte: {len(trades_on_pair)}/{self.config.MAX_TRADES_PER_PAIR}")
             return False
         
         # Vérification capital EUR disponible (pas le total avec crypto!)
@@ -574,7 +581,7 @@ class ScalpingBot:
         # Vérification exposition maximale par asset de base
         base_asset = symbol.replace('EUR', '')
         current_exposure = self.get_asset_exposure(base_asset)
-        max_exposure_per_asset = self.get_total_capital() * 0.30  # Max 30% par crypto
+        max_exposure_per_asset = self.get_total_capital() * self.config.MAX_EXPOSURE_PER_ASSET_PERCENT / 100
         
         if current_exposure + position_size > max_exposure_per_asset:
             self.logger.debug(f"❌ Exposition {base_asset} trop élevée: {current_exposure:.2f} + {position_size:.2f} > {max_exposure_per_asset:.2f}")
@@ -591,15 +598,15 @@ class ScalpingBot:
         """Calcule l'exposition actuelle sur un asset de base"""
         total_exposure = 0.0
         
-        for symbol, trade in self.open_positions.items():
-            if symbol.replace('EUR', '') == base_asset:
+        for trade_id, trade in self.open_positions.items():
+            if trade.pair.replace('EUR', '') == base_asset:
                 try:
-                    ticker = self.binance_client.get_symbol_ticker(symbol=symbol)
+                    ticker = self.binance_client.get_symbol_ticker(symbol=trade.pair)
                     current_price = float(ticker['price'])
                     position_value = trade.size * current_price
                     total_exposure += position_value
                 except Exception as e:
-                    self.logger.error(f"❌ Erreur calcul exposition {symbol}: {e}")
+                    self.logger.error(f"❌ Erreur calcul exposition {trade.pair}: {e}")
                     # Fallback sur le prix d'entrée
                     position_value = trade.size * trade.entry_price
                     total_exposure += position_value
@@ -735,19 +742,19 @@ class ScalpingBot:
             
             # Valeur des cryptos en positions ouvertes (calcul précis)
             crypto_value = 0.0
-            for symbol, trade in self.open_positions.items():
+            for trade_id, trade in self.open_positions.items():
                 try:
-                    ticker = self.binance_client.get_symbol_ticker(symbol=symbol)
+                    ticker = self.binance_client.get_symbol_ticker(symbol=trade.pair)
                     current_price = float(ticker['price'])
                     position_value = trade.size * current_price
                     crypto_value += position_value
-                    self.logger.debug(f"💎 {symbol}: {trade.size:.6f} x {current_price:.4f} = {position_value:.2f} EUR")
+                    self.logger.debug(f"💎 {trade.pair}: {trade.size:.6f} x {current_price:.4f} = {position_value:.2f} EUR")
                 except Exception as e:
-                    self.logger.error(f"❌ Erreur calcul valeur position {symbol}: {e}")
+                    self.logger.error(f"❌ Erreur calcul valeur position {trade.pair}: {e}")
                     # En cas d'erreur, on utilise la valeur d'entrée
                     position_value = trade.size * trade.entry_price
                     crypto_value += position_value
-                    self.logger.debug(f"💎 {symbol} (fallback): {trade.size:.6f} x {trade.entry_price:.4f} = {position_value:.2f} EUR")
+                    self.logger.debug(f"💎 {trade.pair} (fallback): {trade.size:.6f} x {trade.entry_price:.4f} = {position_value:.2f} EUR")
             
             total_capital += crypto_value
             
@@ -761,40 +768,48 @@ class ScalpingBot:
 
     async def manage_open_positions(self):
         """Gère les positions ouvertes et la surexposition"""
-        for symbol, trade in list(self.open_positions.items()):
+        for trade_id, trade in list(self.open_positions.items()):
             try:
                 # Récupération du prix actuel
-                ticker = self.binance_client.get_symbol_ticker(symbol=symbol)
+                ticker = self.binance_client.get_symbol_ticker(symbol=trade.pair)
                 current_price = float(ticker['price'])
 
                 # Calcul du P&L
                 pnl_percent = (current_price - trade.entry_price) / trade.entry_price * 100
 
                 # Vérification surexposition dynamique
-                base_asset = symbol.replace('EUR', '')
+                base_asset = trade.pair.replace('EUR', '')
                 current_exposure = self.get_asset_exposure(base_asset)
-                max_exposure_per_asset = self.get_total_capital() * 0.30
+                max_exposure_per_asset = self.get_total_capital() * self.config.MAX_EXPOSURE_PER_ASSET_PERCENT / 100
                 if current_exposure > max_exposure_per_asset * 1.01:  # tolérance 1%
-                    self.logger.warning(f"⚠️ Surexposition détectée sur {base_asset}: {current_exposure:.2f} EUR > {max_exposure_per_asset:.2f} EUR (30% du capital)")
-                    await self.close_position(symbol, current_price, "SUREXPOSITION_AUTO")
+                    self.logger.warning(f"⚠️ Surexposition détectée sur {base_asset}: {current_exposure:.2f} EUR > {max_exposure_per_asset:.2f} EUR ({self.config.MAX_EXPOSURE_PER_ASSET_PERCENT}% du capital)")
+                    await self.close_position(trade_id, current_price, "SUREXPOSITION_AUTO")
                     continue
 
                 # Vérification timeout adaptatif
-                volatility = self.calculate_volatility_1h(symbol)
+                volatility = self.calculate_volatility_1h(trade.pair)
                 should_timeout, timeout_reason = self.should_timeout_position(trade, current_price, volatility)
                 if should_timeout:
                     self.logger.info(f"⏱️ {timeout_reason}")
-                    await self.close_position(symbol, current_price, timeout_reason)
+                    await self.close_position(trade_id, current_price, timeout_reason)
                     continue
+
+                # Sortie momentum faible (optionnelle)
+                if self.config.ENABLE_MOMENTUM_EXIT:
+                    should_exit_momentum, momentum_reason = await self.check_momentum_exit(trade, current_price, pnl_percent)
+                    if should_exit_momentum:
+                        self.logger.info(f"📉 {momentum_reason}")
+                        await self.close_position(trade_id, current_price, "MOMENTUM_FAIBLE")
+                        continue
 
                 # Vérification Stop Loss
                 if current_price <= trade.stop_loss:
-                    await self.close_position(symbol, current_price, "STOP_LOSS")
+                    await self.close_position(trade_id, current_price, "STOP_LOSS")
                     continue
 
                 # Vérification Take Profit
                 if current_price >= trade.take_profit:
-                    await self.close_position(symbol, current_price, "TAKE_PROFIT")
+                    await self.close_position(trade_id, current_price, "TAKE_PROFIT")
                     continue
 
                 # Trailing Stop
@@ -803,13 +818,13 @@ class ScalpingBot:
                     new_stop = current_price * (1 - self.config.TRAILING_STEP_PERCENT / 100)
                     if new_stop > trade.stop_loss:
                         trade.stop_loss = new_stop
-                        self.logger.info(f"📈 Trailing Stop mis à jour pour {symbol}: {new_stop:.4f} EUR")
+                        self.logger.info(f"📈 Trailing Stop mis à jour pour {trade.pair}: {new_stop:.4f} EUR")
 
                         # Enregistrement en base de données
                         try:
                             trailing_data = {
                                 'trade_id': trade.db_id,
-                                'symbol': symbol,
+                                'symbol': trade.pair,
                                 'old_stop_loss': trade.stop_loss,
                                 'new_stop_loss': new_stop,
                                 'trigger_price': current_price,
@@ -821,12 +836,13 @@ class ScalpingBot:
                             self.logger.error(f"❌ Erreur enregistrement trailing stop: {e}")
 
             except Exception as e:
-                self.logger.error(f"❌ Erreur gestion position {symbol}: {e}")
+                self.logger.error(f"❌ Erreur gestion position {trade_id}: {e}")
 
-    async def close_position(self, symbol: str, exit_price: float, reason: str):
+    async def close_position(self, trade_id: str, exit_price: float, reason: str):
         """Ferme une position"""
         try:
-            trade = self.open_positions[symbol]
+            trade = self.open_positions[trade_id]
+            symbol = trade.pair
             
             # Récupération de l'asset de base (ex: ETH pour ETHEUR)
             base_asset = symbol.replace('EUR', '')
@@ -836,7 +852,7 @@ class ScalpingBot:
             quantity_to_sell = trade.size
             
             # Gestion du solde insuffisant avec tolérance
-            tolerance = 0.001  # Tolérance pour les erreurs d'arrondi
+            tolerance = self.config.BALANCE_TOLERANCE  # Tolérance pour les erreurs d'arrondi
             if available_balance < (quantity_to_sell - tolerance):
                 self.logger.warning(f"⚠️ Solde insuffisant pour {symbol}")
                 self.logger.warning(f"   Solde disponible: {available_balance:.8f} {base_asset}")
@@ -844,13 +860,13 @@ class ScalpingBot:
                 self.logger.warning(f"   Différence: {quantity_to_sell - available_balance:.8f} {base_asset}")
                 
                 # Vérification si c'est une position fantôme
-                if available_balance <= 0.00001:  # Pratiquement zéro
+                if available_balance <= self.config.PHANTOM_POSITION_THRESHOLD:  # Pratiquement zéro
                     self.logger.error(f"❌ Position fantôme détectée pour {symbol}, nettoyage virtuel")
                     await self.close_position_virtually(symbol, exit_price, f"{reason}_PHANTOM")
                     return
                 
                 # Ajustement intelligent du solde
-                usable_balance = available_balance * 0.999  # Marge de sécurité 0.1%
+                usable_balance = available_balance * self.config.BALANCE_SAFETY_MARGIN  # Marge de sécurité
                 if usable_balance > 0:
                     quantity_to_sell = self.round_quantity(symbol, usable_balance)
                     self.logger.info(f"🔧 Ajustement quantité de vente: {quantity_to_sell:.8f} {base_asset}")
@@ -885,7 +901,7 @@ class ScalpingBot:
                 if final_balance < quantity_to_sell:
                     self.logger.warning(f"⚠️ Solde changé entre les vérifications pour {symbol}")
                     self.logger.warning(f"   Nouveau solde: {final_balance:.8f} {base_asset}")
-                    quantity_to_sell = min(quantity_to_sell, final_balance * 0.999)
+                    quantity_to_sell = min(quantity_to_sell, final_balance * self.config.BALANCE_SAFETY_MARGIN)
                     quantity_to_sell = self.round_quantity(symbol, quantity_to_sell)
                 
                 if quantity_to_sell <= 0:
@@ -945,7 +961,7 @@ class ScalpingBot:
             self.daily_trades += 1
             
             # Suppression de la position ouverte
-            del self.open_positions[symbol]
+            del self.open_positions[trade_id]
             
             # Logging
             pnl_symbol = "🚀" if pnl_amount > 0 else "📉"
@@ -982,12 +998,13 @@ class ScalpingBot:
                     self.logger.error(f"❌ Erreur mise à jour DB: {e}")
             
         except Exception as e:
-            self.logger.error(f"❌ Erreur fermeture position {symbol}: {e}")
+            self.logger.error(f"❌ Erreur fermeture position {trade_id}: {e}")
     
-    async def close_position_virtually(self, symbol: str, exit_price: float, reason: str):
+    async def close_position_virtually(self, trade_id: str, exit_price: float, reason: str):
         """Ferme une position virtuellement (sans ordre réel) en cas de problème"""
         try:
-            trade = self.open_positions[symbol]
+            trade = self.open_positions[trade_id]
+            symbol = trade.pair
             
             self.logger.warning(f"🔄 Fermeture virtuelle de {symbol} à {exit_price:.4f} EUR")
             
@@ -1009,7 +1026,7 @@ class ScalpingBot:
             self.daily_trades += 1
             
             # Suppression de la position ouverte
-            del self.open_positions[symbol]
+            del self.open_positions[trade_id]
             
             # Logging spécial pour fermeture virtuelle
             pnl_symbol = "⚠️" 
@@ -1046,7 +1063,7 @@ class ScalpingBot:
                     self.logger.error(f"❌ Erreur mise à jour DB virtuelle: {e}")
             
         except Exception as e:
-            self.logger.error(f"❌ Erreur fermeture virtuelle {symbol}: {e}")
+            self.logger.error(f"❌ Erreur fermeture virtuelle {trade_id}: {e}")
     
     def should_stop_daily_trading(self) -> bool:
         """Vérifie si on doit arrêter le trading pour la journée"""
@@ -1070,11 +1087,12 @@ class ScalpingBot:
         self.logger.info("🛑 Conditions d'arrêt quotidien atteintes")
         
         # Fermeture des positions ouvertes
-        for symbol in list(self.open_positions.keys()):
-            ticker = self.binance_client.get_symbol_ticker(symbol=symbol)
+        for trade_id in list(self.open_positions.keys()):
+            trade = self.open_positions[trade_id]
+            ticker = self.binance_client.get_symbol_ticker(symbol=trade.pair)
             current_price = float(ticker['price'])
             reason = "DAILY_TARGET" if self.daily_target_reached else "DAILY_STOP_LOSS"
-            await self.close_position(symbol, current_price, reason)
+            await self.close_position(trade_id, current_price, reason)
         
         # Notification finale
         status = "✅ Objectif atteint" if self.daily_target_reached else "🛑 Stop loss quotidien atteint"
@@ -1158,8 +1176,8 @@ class ScalpingBot:
                 'daily_pnl': self.daily_pnl,
                 'total_pnl': self.get_total_capital() - self.start_capital,  # P&L total par rapport au capital initial EUR
                 'win_rate': win_rate,
-                'pairs_analyzed': [pos.pair for pos in self.open_positions.values()],
-                'top_pair': list(self.open_positions.keys())[0] if self.open_positions else None
+                'pairs_analyzed': [trade.pair for trade in self.open_positions.values()],
+                'top_pair': list(self.open_positions.values())[0].pair if self.open_positions else None
             }
             
             await self.database.insert_realtime_metrics(metrics)
@@ -1243,13 +1261,32 @@ class ScalpingBot:
             return 0.0
 
     def count_trades_per_pair(self, symbol: str) -> int:
-        """Compte le nombre de trades ouverts pour une paire"""
-        return len([trade for trade_symbol, trade in self.open_positions.items() 
-                   if trade_symbol == symbol])
+        """Compte le nombre de trades ouverts pour une paire - VÉRIFICATION RENFORCÉE"""
+        # Comptage en mémoire par symbole
+        memory_count = len([trade for trade_id, trade in self.open_positions.items() 
+                           if trade.pair == symbol])
+        
+        # Vérification supplémentaire via solde Binance
+        try:
+            base_asset = symbol.replace('EUR', '')
+            binance_balance = self.get_asset_balance(base_asset)
+            
+            # Si on a un solde significatif mais pas de position en mémoire = incohérence
+            if binance_balance > 0.001 and memory_count == 0:
+                self.logger.warning(f"⚠️ Incohérence détectée: {base_asset} balance={binance_balance:.6f} mais 0 positions en mémoire")
+                # Considérer qu'on a déjà une position pour éviter la surexposition
+                return 1
+            
+            return memory_count
+            
+        except Exception as e:
+            self.logger.error(f"❌ Erreur vérification solde {symbol}: {e}")
+            # En cas d'erreur, on est conservateur et on suppose qu'on a déjà des positions
+            return max(memory_count, 1)  # Au minimum 1 pour éviter le sur-trading
 
     def can_open_position_enhanced(self, symbol: str, volatility: float) -> tuple[bool, str]:
         """Vérifie si on peut ouvrir une position selon les nouvelles règles"""
-        # 1. Vérifier limite trades par paire
+        # 1. Vérifier limite trades par paire - STRICT
         current_trades = self.count_trades_per_pair(symbol)
         if current_trades >= self.config.MAX_TRADES_PER_PAIR:
             return False, f"Limite trades par paire atteinte ({current_trades}/{self.config.MAX_TRADES_PER_PAIR})"
@@ -1259,8 +1296,30 @@ class ScalpingBot:
             return False, f"Volatilité insuffisante ({volatility:.2f}% < {self.config.MIN_VOLATILITY_1H_PERCENT}%)"
         
         # 3. Vérifier nombre total de positions
-        if len(self.open_positions) >= self.config.MAX_OPEN_POSITIONS:
-            return False, f"Limite positions totales atteinte ({len(self.open_positions)}/{self.config.MAX_OPEN_POSITIONS})"
+        total_open_positions = len(self.open_positions)
+        if total_open_positions >= self.config.MAX_OPEN_POSITIONS:
+            return False, f"Limite positions totales atteinte ({total_open_positions}/{self.config.MAX_OPEN_POSITIONS})"
+        
+        # 4. VÉRIFICATION EXPOSITION : Contrôler AVANT + APRÈS la nouvelle position
+        base_asset = symbol.replace('EUR', '')
+        current_exposure = self.get_asset_exposure(base_asset)
+        total_capital = self.get_total_capital()
+        max_exposure_per_asset = total_capital * self.config.MAX_EXPOSURE_PER_ASSET_PERCENT / 100
+        
+        # Calcul de la nouvelle exposition après ajout de la position
+        new_position_size = self.calculate_position_size(symbol, volatility)
+        future_exposure = current_exposure + new_position_size
+        
+        if current_exposure > max_exposure_per_asset:
+            return False, f"Exposition {base_asset} déjà trop élevée ({current_exposure:.2f} EUR > {max_exposure_per_asset:.2f} EUR = {self.config.MAX_EXPOSURE_PER_ASSET_PERCENT}% du capital)"
+        
+        if future_exposure > max_exposure_per_asset:
+            return False, f"Nouvelle position créerait surexposition {base_asset} ({current_exposure:.2f} + {new_position_size:.2f} = {future_exposure:.2f} EUR > {max_exposure_per_asset:.2f} EUR = {self.config.MAX_EXPOSURE_PER_ASSET_PERCENT}% du capital)"
+        
+        # 5. VÉRIFICATION CAPITAL : Capital EUR minimum disponible avec marge
+        eur_balance = self.get_asset_balance('EUR')
+        if eur_balance < new_position_size * 1.1:  # Marge de sécurité 10%
+            return False, f"Capital EUR insuffisant ({eur_balance:.2f} < {new_position_size * 1.1:.2f} EUR requis)"
         
         return True, "OK"
 
@@ -1282,3 +1341,54 @@ class ScalpingBot:
                 return True, f"TIMEOUT_ADAPTATIF ({duration_minutes:.0f}min, P&L:{pnl_percent:+.2f}%)"
         
         return False, ""
+
+    async def check_momentum_exit(self, trade: Trade, current_price: float, pnl_percent: float) -> tuple[bool, str]:
+        """Vérifie si on doit sortir pour faiblesse du momentum"""
+        try:
+            # Vérifier si P&L dans la zone de momentum faible
+            min_range, max_range = self.config.MOMENTUM_PNL_RANGE
+            if not (min_range <= pnl_percent <= max_range):
+                return False, ""  # P&L en dehors de la zone de momentum faible
+            
+            # Récupération des données techniques
+            klines = self.binance_client.get_klines(
+                symbol=trade.pair,
+                interval=getattr(Client, f'KLINE_INTERVAL_{self.config.TIMEFRAME}'),
+                limit=50
+            )
+            
+            if len(klines) < 30:
+                return False, ""
+            
+            # Préparation des données
+            df = pd.DataFrame(klines, columns=[
+                'timestamp', 'open', 'high', 'low', 'close', 'volume',
+                'close_time', 'quote_volume', 'trades_count', 'taker_buy_base', 'taker_buy_quote', 'ignore'
+            ])
+            
+            for col in ['open', 'high', 'low', 'close', 'volume']:
+                df[col] = df[col].astype(float)
+            
+            # Calcul RSI
+            rsi = talib.RSI(df['close'], timeperiod=self.config.RSI_PERIOD) # type: ignore
+            if np.isnan(rsi.iloc[-1]):
+                return False, ""
+            
+            # Calcul MACD
+            macd, macdsignal, macdhist = talib.MACD(df['close']) # type: ignore
+            if np.isnan(macdhist.iloc[-1]):
+                return False, ""
+            
+            # Conditions de sortie momentum faible
+            rsi_condition = rsi.iloc[-1] < self.config.MOMENTUM_RSI_THRESHOLD
+            macd_condition = macdhist.iloc[-1] < 0 if self.config.MOMENTUM_MACD_NEGATIVE else True
+            
+            if rsi_condition and macd_condition:
+                reason = f"Momentum faible détecté (RSI:{rsi.iloc[-1]:.1f}, MACD_hist:{macdhist.iloc[-1]:.6f}, P&L:{pnl_percent:+.2f}%)"
+                return True, reason
+            
+            return False, ""
+            
+        except Exception as e:
+            self.logger.error(f"❌ Erreur vérification momentum {trade.pair}: {e}")
+            return False, ""

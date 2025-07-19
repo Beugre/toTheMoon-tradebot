@@ -47,22 +47,34 @@ class TelegramNotifier:
         else:
             self.logger.warning("⚠️ Telegram non configuré ou module manquant")
 
-    async def send_message(self, message: str, parse_mode: str = "Markdown") -> bool:
+    async def send_message(self, message: str, parse_mode: Optional[str] = None) -> bool:
         """Envoie un message Telegram"""
         if not self.bot:
             self.logger.debug("Telegram non configuré - message non envoyé")
             return False
         
         try:
+            # Nettoyage du message pour éviter les erreurs de parsing
+            clean_message = message.replace('_', ' ').replace('*', '').replace('`', '')
+            
             await self.bot.send_message(
                 chat_id=self.chat_id,
-                text=message,
-                parse_mode=parse_mode
+                text=clean_message,
+                parse_mode=parse_mode  # Désactiver le Markdown
             ) # type: ignore
             return True
         except TelegramError as e: # type: ignore
             self.logger.error(f"❌ Erreur envoi Telegram: {e}")
-            return False
+            # Retry sans formatage en cas d'erreur
+            try:
+                simple_message = message.replace('*', '').replace('_', '').replace('`', '').replace('#', '')
+                await self.bot.send_message(
+                    chat_id=self.chat_id,
+                    text=simple_message
+                ) # type: ignore
+                return True
+            except:
+                return False
         except Exception as e:
             self.logger.error(f"❌ Erreur inattendue Telegram: {e}")
             return False
@@ -75,7 +87,7 @@ class TelegramNotifier:
         # Valeurs dynamiques basées sur la configuration de trading
         daily_target_percent = self.trading_config.DAILY_TARGET_PERCENT if self.trading_config else 1.0
         daily_stop_percent = self.trading_config.DAILY_STOP_LOSS_PERCENT if self.trading_config else 1.0
-        position_size_percent = self.trading_config.POSITION_SIZE_PERCENT if self.trading_config else 15
+        position_size_percent = self.trading_config.BASE_POSITION_SIZE_PERCENT if self.trading_config else 15
         max_positions = self.trading_config.MAX_OPEN_POSITIONS if self.trading_config else 3
         
         message = f"""
@@ -103,7 +115,7 @@ class TelegramNotifier:
         # Valeurs dynamiques basées sur la configuration
         stop_loss_percent = self.trading_config.STOP_LOSS_PERCENT if self.trading_config else 0.5
         take_profit_percent = self.trading_config.TAKE_PROFIT_PERCENT if self.trading_config else 1.0
-        trailing_stop_percent = self.trading_config.TRAILING_STOP_PERCENT if self.trading_config else 0.5
+        trailing_stop_percent = self.trading_config.TRAILING_STEP_PERCENT if self.trading_config else 0.5
         
         message = f"""
 📈 **Trade Ouvert - {trade.pair}**

@@ -14,7 +14,9 @@ ssh $VpsHost "systemctl stop $ServiceName 2>/dev/null; pkill -f 'python.*main.py
 
 # Etape 2: Deployer les fichiers modifies
 Write-Host "Deploiement des fichiers..." -ForegroundColor Yellow
+scp config.py ${VpsHost}:${BotDir}/config.py
 scp main.py ${VpsHost}:${BotDir}/main.py
+scp utils/risk_manager.py ${VpsHost}:${BotDir}/utils/risk_manager.py
 scp utils/telegram_notifier.py ${VpsHost}:${BotDir}/utils/telegram_notifier.py
 scp utils/sheets_logger.py ${VpsHost}:${BotDir}/utils/sheets_logger.py
 
@@ -37,7 +39,8 @@ $systemdResult = ssh $VpsHost "systemctl start $ServiceName 2>/dev/null && syste
 
 if ($systemdResult -eq "active") {
     Write-Host "Bot redemarre avec systemd" -ForegroundColor Green
-} else {
+}
+else {
     Write-Host "Demarrage manuel..." -ForegroundColor Yellow
     ssh $VpsHost "cd $BotDir; nohup python3 main.py > logs/bot.log 2>&1 &"
     Start-Sleep 3
@@ -45,7 +48,8 @@ if ($systemdResult -eq "active") {
     $processCheck = ssh $VpsHost "pgrep -f 'python.*main.py'"
     if ($processCheck) {
         Write-Host "Bot demarre manuellement (PID: $processCheck)" -ForegroundColor Green
-    } else {
+    }
+    else {
         Write-Host "Echec du demarrage" -ForegroundColor Red
         exit 1
     }
@@ -64,10 +68,13 @@ if ($healthCheck) {
 
 Write-Host ""
 Write-Host "DEPLOIEMENT TERMINE!" -ForegroundColor Green
-Write-Host "Nouvelles fonctionnalites:" -ForegroundColor Cyan
-Write-Host "- Capital total dynamique (EUR + crypto)"
-Write-Host "- P&L journalier base sur capital reel"
-Write-Host "- Notifications Telegram optimisees"
+Write-Host "Nouvelles optimisations:" -ForegroundColor Cyan
+Write-Host "- SL reduit a 0.25% et TP a 0.8%"
+Write-Host "- Timeout adaptatif selon volatilite (20-30min)"
+Write-Host "- Max 2 trades par paire"
+Write-Host "- Position sizing adaptatif selon volatilite"
+Write-Host "- Minimum 0.5% volatilite pour trader"
+Write-Host "- Google Sheets avec capital before/after"
 Write-Host ""
 Write-Host "Commandes utiles:" -ForegroundColor Yellow
 Write-Host "Logs: ssh $VpsHost 'tail -f $BotDir/logs/bot.log'"

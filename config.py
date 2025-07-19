@@ -23,6 +23,7 @@ class TradingConfig:
     # Paramètres de position - Configuration optimisée post-perte
     MAX_OPEN_POSITIONS: int = 5  # Plus d'opportunités simultanées
     MAX_TRADES_PER_PAIR: int = 2  # Limite par paire pour éviter surlevier caché
+    MAX_EXPOSURE_PER_ASSET_PERCENT: float = 20.0  # Exposition max par crypto (20% du capital)
     STOP_LOSS_PERCENT: float = 0.25  # SL plus serré pour limiter pertes
     TAKE_PROFIT_PERCENT: float = 0.8  # TP légèrement plus conservateur
     TRAILING_ACTIVATION_PERCENT: float = 0.1  # Activation trailing dès 0.1%
@@ -54,7 +55,8 @@ class TradingConfig:
     EMA_FAST_PERIOD: int = 9
     EMA_SLOW_PERIOD: int = 21
     RSI_PERIOD: int = 14
-    RSI_OVERSOLD_LEVEL: int = 40
+    RSI_OVERSOLD_LEVEL: int = 30  # Seuil de survente pour rebond
+    RSI_BOUNCE_CONFIRM_LEVEL: int = 35  # Seuil de confirmation du rebond
     MACD_FAST_PERIOD: int = 12
     MACD_SLOW_PERIOD: int = 26
     MACD_SIGNAL_PERIOD: int = 9
@@ -63,6 +65,17 @@ class TradingConfig:
     
     # Seuils de signal - Plus sélectif pour capital élevé
     MIN_SIGNAL_CONDITIONS: int = 4
+    
+    # Paramètres de gestion des positions et soldes
+    PHANTOM_POSITION_THRESHOLD: float = 0.00001  # Seuil position fantôme
+    BALANCE_SAFETY_MARGIN: float = 0.999  # Marge de sécurité pour soldes (99.9%)
+    BALANCE_TOLERANCE: float = 0.001  # Tolérance erreurs d'arrondi
+    
+    # Paramètres de sortie momentum faible
+    ENABLE_MOMENTUM_EXIT: bool = True  # Activer sortie momentum faible
+    MOMENTUM_PNL_RANGE: tuple = (-0.2, 0.2)  # Range P&L pour sortie momentum
+    MOMENTUM_RSI_THRESHOLD: int = 45  # RSI max pour sortie momentum
+    MOMENTUM_MACD_NEGATIVE: bool = True  # MACD histogram négatif requis
 
 @dataclass
 class APIConfig:

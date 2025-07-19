@@ -70,7 +70,7 @@ class RiskManager:
             return False, "Capital insuffisant"
         
         # Vérification de la taille de position
-        max_position_size = self.current_capital * self.config.POSITION_SIZE_PERCENT / 100
+        max_position_size = self.current_capital * self.config.BASE_POSITION_SIZE_PERCENT / 100
         if position_size > max_position_size * 1.1:  # 10% de marge
             return False, f"Taille de position trop importante (max: {max_position_size:.2f} EUR)"
         
@@ -92,7 +92,7 @@ class RiskManager:
         """Calcule la taille optimale de position"""
         
         # Taille de base
-        base_size = capital * self.config.POSITION_SIZE_PERCENT / 100
+        base_size = capital * self.config.BASE_POSITION_SIZE_PERCENT / 100
         
         # Ajustement selon le niveau de risque
         adjusted_size = base_size * risk_level

@@ -204,6 +204,6 @@ if __name__ == "__main__":
     
     print(f"\\n🎯 Configuration personnalisée créée:")
     print(f"  Objectif: {my_config.DAILY_TARGET_PERCENT}%")
-    print(f"  Position: {my_config.POSITION_SIZE_PERCENT}%")
+    print(f"  Position: {my_config.BASE_POSITION_SIZE_PERCENT}%")
     print(f"  SL: {my_config.STOP_LOSS_PERCENT}%")
     print(f"  TP: {my_config.TAKE_PROFIT_PERCENT}%")

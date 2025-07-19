@@ -7,7 +7,7 @@ import json
 import logging
 import os
 import sqlite3
-from contextlib import asynccontextmanager
+from contextlib import contextmanager
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 
@@ -23,8 +23,8 @@ class TradingDatabase:
         """Crée le répertoire data s'il n'existe pas"""
         os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
     
-    @asynccontextmanager
-    async def get_connection(self):
+    @contextmanager
+    def get_connection(self):
         """Context manager pour les connexions DB"""
         conn = None
         try:
@@ -37,7 +37,7 @@ class TradingDatabase:
     
     async def initialize_database(self):
         """Initialise la base de données avec toutes les tables"""
-        async with self.get_connection() as conn:
+        with self.get_connection() as conn:
             # Table des trades
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS trades (
@@ -146,7 +146,7 @@ class TradingDatabase:
     
     async def insert_trade(self, trade_data: Dict) -> int:
         """Insert un nouveau trade"""
-        async with self.get_connection() as conn:
+        with self.get_connection() as conn:
             cursor = conn.execute("""
                 INSERT INTO trades (
                     symbol, side, entry_price, quantity, stop_loss, take_profit,
@@ -170,7 +170,7 @@ class TradingDatabase:
     
     async def update_trade_exit(self, trade_id: int, exit_data: Dict):
         """Met à jour un trade à la fermeture"""
-        async with self.get_connection() as conn:
+        with self.get_connection() as conn:
             conn.execute("""
                 UPDATE trades SET
                     exit_price = ?, exit_time = ?, status = ?, exit_reason = ?,
@@ -190,7 +190,7 @@ class TradingDatabase:
     
     async def insert_trailing_stop(self, trailing_data: Dict):
         """Insert un événement de trailing stop"""
-        async with self.get_connection() as conn:
+        with self.get_connection() as conn:
             conn.execute("""
                 INSERT INTO trailing_stops (
                     trade_id, symbol, old_stop_loss, new_stop_loss,
@@ -209,7 +209,7 @@ class TradingDatabase:
     
     async def insert_daily_performance(self, perf_data: Dict):
         """Insert les performances quotidiennes"""
-        async with self.get_connection() as conn:
+        with self.get_connection() as conn:
             conn.execute("""
                 INSERT OR REPLACE INTO daily_performance (
                     date, start_capital, end_capital, daily_pnl, daily_pnl_percent,
@@ -239,7 +239,7 @@ class TradingDatabase:
     
     async def insert_realtime_metrics(self, metrics: Dict):
         """Insert les métriques en temps réel"""
-        async with self.get_connection() as conn:
+        with self.get_connection() as conn:
             conn.execute("""
                 INSERT INTO realtime_metrics (
                     timestamp, current_capital, open_positions, daily_pnl,
@@ -262,7 +262,7 @@ class TradingDatabase:
     
     async def insert_signal(self, signal_data: Dict):
         """Insert un signal détecté"""
-        async with self.get_connection() as conn:
+        with self.get_connection() as conn:
             conn.execute("""
                 INSERT INTO signals (
                     symbol, timestamp, signal_type, signal_strength,
@@ -284,7 +284,7 @@ class TradingDatabase:
     # Méthodes de requête pour les investisseurs
     async def get_performance_summary(self, days: int = 30) -> Dict:
         """Récupère un résumé des performances"""
-        async with self.get_connection() as conn:
+        with self.get_connection() as conn:
             # Performance globale
             cursor = conn.execute("""
                 SELECT 
@@ -321,7 +321,7 @@ class TradingDatabase:
     
     async def get_trades_history(self, limit: int = 100) -> List[Dict]:
         """Récupère l'historique des trades"""
-        async with self.get_connection() as conn:
+        with self.get_connection() as conn:
             cursor = conn.execute("""
                 SELECT * FROM trades 
                 ORDER BY entry_time DESC 
@@ -332,7 +332,7 @@ class TradingDatabase:
     
     async def get_trailing_stops_history(self, symbol: str = None) -> List[Dict]: # type: ignore
         """Récupère l'historique des trailing stops"""
-        async with self.get_connection() as conn:
+        with self.get_connection() as conn:
             if symbol:
                 cursor = conn.execute("""
                     SELECT * FROM trailing_stops 
@@ -356,7 +356,7 @@ class TradingDatabase:
             trailing_stops = await self.get_trailing_stops_history()
             
             # Calculs supplémentaires pour les investisseurs
-            async with self.get_connection() as conn:
+            with self.get_connection() as conn:
                 # Évolution du capital
                 cursor = conn.execute("""
                     SELECT date, end_capital 
