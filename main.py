@@ -406,49 +406,32 @@ class ScalpingBot:
             for col in ['open', 'high', 'low', 'close', 'volume']:
                 df[col] = df[col].astype(float)
             
-            # Calcul des indicateurs techniques
-            signal_score = 0
-            conditions = []
+            # 🚀 ANALYSE TECHNIQUE AVANCÉE avec TechnicalAnalyzer
+            analysis = self.technical_analyzer.analyze_pair(df, symbol)
             
-            # EMA 9 et 21
-            ema9 = talib.EMA(df['close'], timeperiod=9) # type: ignore
-            ema21 = talib.EMA(df['close'], timeperiod=21) # type: ignore
-            
-            if ema9.iloc[-1] > ema21.iloc[-1]:
-                signal_score += 1
-                conditions.append("EMA(9) > EMA(21)")
-            
-            # MACD
-            macd, macdsignal, macdhist = talib.MACD(df['close']) # type: ignore
-            if not np.isnan(macd.iloc[-1]) and not np.isnan(macdsignal.iloc[-1]):
-                if macd.iloc[-1] > macdsignal.iloc[-1]:
-                    signal_score += 1
-                    conditions.append("MACD > Signal")
-            
-            # RSI - Détection de rebond confirmé
-            rsi = talib.RSI(df['close'], timeperiod=self.config.RSI_PERIOD) # type: ignore
-            if not np.isnan(rsi.iloc[-1]) and not np.isnan(rsi.iloc[-2]):
-                # Rebond confirmé : RSI était en survente et remonte
-                if (rsi.iloc[-2] < self.config.RSI_OVERSOLD_LEVEL and 
-                    rsi.iloc[-1] > self.config.RSI_BOUNCE_CONFIRM_LEVEL):
-                    signal_score += 1
-                    conditions.append(f"RSI rebond confirmé ({rsi.iloc[-2]:.1f} -> {rsi.iloc[-1]:.1f})")
-            
-            # Bollinger Bands
-            bb_upper, bb_middle, bb_lower = talib.BBANDS(df['close'], timeperiod=20, nbdevup=2, nbdevdn=2) # type: ignore
-            current_price = df['close'].iloc[-1]
-            
-            if not np.isnan(bb_lower.iloc[-1]):
-                if current_price <= bb_lower.iloc[-1] * 1.002:  # 0.2% de marge
-                    signal_score += 1
-                    conditions.append("Prix proche Bollinger inf.")
-            
-            # Signal valide si >= 3 conditions
-            if signal_score >= 3:
-                self.logger.info(f"✅ Signal détecté : {symbol} (Score : {signal_score}/4)")
-                for condition in conditions:
-                    self.logger.info(f"   - {condition}")
+            # Vérification avec la configuration MIN_SIGNAL_CONDITIONS
+            if self.technical_analyzer.is_valid_signal(analysis, self.config.MIN_SIGNAL_CONDITIONS):
+                self.logger.info(f"✅ Signal détecté : {symbol}")
+                self.logger.info(f"   📊 Score total: {analysis.total_score:.1f}")
+                self.logger.info(f"   🎯 Recommandation: {analysis.recommendation}")
+                self.logger.info(f"   📈 Tendance: {analysis.trend}")
+                self.logger.info(f"   ⚡ Momentum: {analysis.momentum}")
+                self.logger.info(f"   📊 Conditions validées: {len(analysis.signals)}/{self.config.MIN_SIGNAL_CONDITIONS}")
+                
+                # Log des signaux détectés
+                for signal in analysis.signals:
+                    strength_emoji = {"WEAK": "🟡", "MODERATE": "🟠", "STRONG": "🔴", "VERY_STRONG": "🟣"}
+                    emoji = strength_emoji.get(signal.strength.name, "⚪")
+                    self.logger.info(f"   {emoji} {signal.indicator}: {signal.description}")
+                
                 return TradeDirection.LONG
+            
+            # Log si signal insuffisant
+            if len(analysis.signals) > 0:
+                self.logger.info(f"⚠️ Signal {symbol} insuffisant: {len(analysis.signals)}/{self.config.MIN_SIGNAL_CONDITIONS} conditions (score: {analysis.total_score:.1f})")
+                self.logger.info(f"   🎯 Recommandation: {analysis.recommendation}")
+                for signal in analysis.signals[:3]:  # Max 3 signaux pour éviter spam
+                    self.logger.info(f"   - {signal.indicator}: {signal.description}")
             
             return None
             
