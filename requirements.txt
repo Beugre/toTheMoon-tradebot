@@ -1,5 +1,5 @@
-# Dépendances Dashboard Streamlit Cloud
-# Ce fichier est utilisé automatiquement par Streamlit Cloud
+# Streamlit Dashboard Dependencies
+# Optimized for Python 3.13 and cloud deployment
 
 streamlit>=1.28.0
 plotly>=5.15.0
