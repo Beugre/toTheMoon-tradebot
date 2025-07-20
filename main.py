@@ -1,6 +1,6 @@
 """
-Bot de Trading Scalping Automatisé - CAPITAL DYNAMIQUE
-Stratégie multi-paires EUR avec gestion avancée des risques
+Bot de Trading Scalping Automatisé - CAPITAL DYNAMIQUE USDC
+Stratégie multi-paires USDC avec gestion avancée des risques et liquidité maximale
 """
 
 import asyncio
@@ -30,12 +30,15 @@ from telegram import Bot
 
 # Configuration
 from config import API_CONFIG, TradingConfig
+from trading_hours import (get_current_trading_session, get_hours_status_message,
+                           get_trading_intensity, is_trading_hours_active)
 from utils.database import TradingDatabase
+from utils.enhanced_sheets_logger import EnhancedSheetsLogger
 from utils.logger import setup_logger
 from utils.risk_manager import RiskManager
-from utils.sheets_logger import SheetsLogger
 from utils.technical_indicators import TechnicalAnalyzer
 from utils.telegram_notifier import TelegramNotifier
+from utils.trading_hours_notifier import TradingHoursNotifier
 
 
 class TradeDirection(Enum):
@@ -96,16 +99,22 @@ class ScalpingBot:
             trading_config=self.config
         )
         
+        # Initialize trading hours notifier
+        self.hours_notifier = TradingHoursNotifier(
+            self.telegram_notifier,
+            self.config
+        )
+        
         # Initialize Google Sheets optionally
         if API_CONFIG.ENABLE_GOOGLE_SHEETS:
             try:
-                self.sheets_logger = SheetsLogger(
+                self.sheets_logger = EnhancedSheetsLogger(
                     API_CONFIG.GOOGLE_SHEETS_CREDENTIALS, 
                     API_CONFIG.GOOGLE_SHEETS_SPREADSHEET_ID
                 )
-                logging.info(f"📊 Google Sheets activé - ID: {API_CONFIG.GOOGLE_SHEETS_SPREADSHEET_ID}")
+                logging.info(f"📊 Enhanced Google Sheets activé - ID: {API_CONFIG.GOOGLE_SHEETS_SPREADSHEET_ID}")
             except Exception as e:
-                logging.error(f"❌ Erreur Google Sheets: {e}")
+                logging.error(f"❌ Erreur Enhanced Google Sheets: {e}")
                 self.sheets_logger = None
         else:
             self.sheets_logger = None
@@ -118,6 +127,9 @@ class ScalpingBot:
         self.open_positions: Dict[str, Trade] = {}  # Une position par ID unique
         self.start_capital = 0.0
         self.current_capital = 0.0
+        
+        # Anti-fragmentation tracking
+        self.last_trade_time: Dict[str, datetime] = {}  # Derniers trades par paire
         self.daily_target_reached = False
         self.daily_stop_loss_hit = False
         
@@ -158,7 +170,7 @@ class ScalpingBot:
         for trade_id, trade in self.open_positions.items():
             symbol = trade.pair
             try:
-                base_asset = symbol.replace('EUR', '')
+                base_asset = symbol.replace('USDC', '')
                 available_balance = self.get_asset_balance(base_asset)
                 
                 # Position fantôme si solde pratiquement nul mais position ouverte
@@ -194,10 +206,10 @@ class ScalpingBot:
         return len(phantom_positions)
 
     async def initialize_capital(self):
-        """Initialise le capital à partir de l'API Binance (EUR + valeur crypto)"""
+        """Initialise le capital à partir de l'API Binance (USDC + valeur crypto)"""
         try:
             account_info = self.binance_client.get_account()
-            eur_balance = 0.0
+            usdc_balance = 0.0
             crypto_value = 0.0
             significant_balances = []
             self.logger.info("💰 Soldes disponibles:")
@@ -205,29 +217,29 @@ class ScalpingBot:
                 free_balance = float(balance['free'])
                 asset = balance['asset']
                 if free_balance > 0:
-                    if asset == 'EUR':
-                        eur_balance = free_balance
+                    if asset == 'USDC':
+                        usdc_balance = free_balance
                         self.logger.info(f"   💶 {asset}: {free_balance:.2f}")
                     elif free_balance > 0.001:
-                        # Conversion en EUR pour le capital initial
+                        # Conversion en USDC pour le capital initial
                         try:
-                            symbol = asset + 'EUR'
+                            symbol = asset + 'USDC'
                             ticker = self.binance_client.get_symbol_ticker(symbol=symbol)
-                            price_eur = float(ticker['price'])
-                            value_eur = free_balance * price_eur
-                            crypto_value += value_eur
-                            significant_balances.append(f"{asset}: {free_balance:.8f} ({value_eur:.2f} EUR)")
+                            price_usdc = float(ticker['price'])
+                            value_usdc = free_balance * price_usdc
+                            crypto_value += value_usdc
+                            significant_balances.append(f"{asset}: {free_balance:.8f} ({value_usdc:.2f} USDC)")
                         except Exception:
                             significant_balances.append(f"{asset}: {free_balance:.8f}")
             if significant_balances:
                 self.logger.info(f"   🪙 Autres: {', '.join(significant_balances[:5])}")
-            if eur_balance == 0.0 and crypto_value == 0.0:
-                raise ValueError("Aucun solde EUR ou crypto trouvé dans le compte")
-            total_capital = eur_balance + crypto_value
+            if usdc_balance == 0.0 and crypto_value == 0.0:
+                raise ValueError("Aucun solde USDC ou crypto trouvé dans le compte")
+            total_capital = usdc_balance + crypto_value
             self.start_capital = total_capital
             self.current_capital = total_capital
-            self.logger.info(f"💰 Capital initial total: {self.start_capital:.2f} EUR (EUR: {eur_balance:.2f}, Crypto: {crypto_value:.2f})")
-            self.logger.info(f"📊 Taille de position configurée: {self.config.BASE_POSITION_SIZE_PERCENT}% = {self.calculate_position_size():.2f} EUR")
+            self.logger.info(f"💰 Capital initial total: {self.start_capital:.2f} USDC (USDC: {usdc_balance:.2f}, Crypto: {crypto_value:.2f})")
+            self.logger.info(f"📊 Taille de position configurée: {self.config.BASE_POSITION_SIZE_PERCENT}% = {self.calculate_position_size():.2f} USDC")
         except Exception as e:
             self.logger.error(f"❌ Erreur initialisation capital: {e}")
             raise
@@ -236,13 +248,27 @@ class ScalpingBot:
         """Boucle principale du bot"""
         while self.is_running:
             try:
+                # Vérification et notification des changements d'horaires
+                await self.hours_notifier.check_and_notify_schedule_changes()
+                
+                # Vérification des horaires de trading
+                if not is_trading_hours_active(self.config):
+                    hours_status = get_hours_status_message(self.config)
+                    self.logger.info(f"⏰ {hours_status}")
+                    await asyncio.sleep(300)  # Attendre 5 minutes si hors horaires
+                    continue
+                
                 # Vérification des conditions d'arrêt quotidien
                 if self.should_stop_daily_trading():
                     await self.handle_daily_stop()
                     break
                 
-                # Scan des paires EUR
-                top_pairs = await self.scan_eur_pairs()
+                # Affichage status horaires
+                hours_status = get_hours_status_message(self.config)
+                self.logger.info(f"⏰ {hours_status}")
+                
+                # Scan des paires USDC
+                top_pairs = await self.scan_usdc_pairs()
                 
                 # Recherche de signaux
                 for pair_info in top_pairs:
@@ -265,6 +291,10 @@ class ScalpingBot:
                 if self.metrics_counter % 50 == 0:
                     await self.check_positions_consistency()
                 
+                # Vérification de la volatilité du marché (toutes les 30 itérations)
+                if self.metrics_counter % 30 == 0:
+                    await self.check_market_volatility(top_pairs)
+                
                 # Pause avant le prochain scan
                 await asyncio.sleep(self.config.SCAN_INTERVAL)
                 
@@ -272,23 +302,23 @@ class ScalpingBot:
                 self.logger.error(f"❌ Erreur dans la boucle principale: {e}")
                 await asyncio.sleep(5)
 
-    async def scan_eur_pairs(self) -> List[PairScore]:
-        """Scanne et classe les paires EUR par score"""
+    async def scan_usdc_pairs(self) -> List[PairScore]:
+        """Scanne et classe les paires USDC par score"""
         try:
-            self.logger.info("🔎 Scan des paires EUR en cours...")
+            self.logger.info("🔎 Scan des paires USDC en cours...")
             
             # Récupération des tickers
             tickers = self.binance_client.get_ticker()
-            eur_pairs = [t for t in tickers if t['symbol'].endswith('EUR')]
+            usdc_pairs = [t for t in tickers if t['symbol'].endswith('USDC')]
             
             pair_scores = []
             
-            for ticker in eur_pairs:
+            for ticker in usdc_pairs:
                 symbol = ticker['symbol']
                 
                 # Vérification volume minimum
-                volume_eur = float(ticker['quoteVolume'])
-                if volume_eur < self.config.MIN_VOLUME_EUR:
+                volume_usdc = float(ticker['quoteVolume'])
+                if volume_usdc < self.config.MIN_VOLUME_USDC:
                     continue
                 
                 # Calcul spread
@@ -306,12 +336,12 @@ class ScalpingBot:
                 atr = await self.calculate_atr(symbol)
                 
                 # Score de sélection
-                score = (0.6 * price_change + 0.4 * (volume_eur / 1000000))
+                score = (0.6 * price_change + 0.4 * (volume_usdc / 1000000))
                 
                 pair_scores.append(PairScore(
                     pair=symbol,
                     volatility=price_change,
-                    volume=volume_eur,
+                    volume=volume_usdc,
                     score=score,
                     spread=spread,
                     atr=atr
@@ -323,7 +353,7 @@ class ScalpingBot:
             
             self.logger.info(f"📊 Top {len(top_pairs)} paires sélectionnées:")
             for i, pair in enumerate(top_pairs):
-                self.logger.info(f"  {i+1}. {pair.pair} - Score: {pair.score:.2f} - Vol: {pair.volatility:.2f}% - Volume: {pair.volume/1000000:.1f}M EUR")
+                self.logger.info(f"  {i+1}. {pair.pair} - Score: {pair.score:.2f} - Vol: {pair.volatility:.2f}% - Volume: {pair.volume/1000000:.1f}M USDC")
             
             return top_pairs
             
@@ -427,8 +457,16 @@ class ScalpingBot:
             return None
 
     async def execute_trade(self, symbol: str, direction: TradeDirection):
-        """Exécute un trade"""
+        """Exécute un trade avec contrôle anti-fragmentation"""
         try:
+            # 🚨 CONTRÔLE ANTI-FRAGMENTATION
+            now = datetime.now()
+            if symbol in self.last_trade_time:
+                time_since_last = (now - self.last_trade_time[symbol]).total_seconds()
+                if time_since_last < self.config.MIN_TRADE_INTERVAL_SECONDS:
+                    self.logger.info(f"🚫 Trade {symbol} bloqué - Trop récent ({time_since_last:.0f}s < {self.config.MIN_TRADE_INTERVAL_SECONDS}s)")
+                    return
+            
             # Calculer la volatilité pour cette paire
             volatility = self.calculate_volatility_1h(symbol)
             
@@ -440,18 +478,18 @@ class ScalpingBot:
             
             # Informations d'allocation avant trade
             total_capital = self.get_total_capital()
-            eur_balance = self.get_asset_balance('EUR')
-            base_asset = symbol.replace('EUR', '')
+            usdc_balance = self.get_asset_balance('USDC')
+            base_asset = symbol.replace('USDC', '')
             current_exposure = self.get_asset_exposure(base_asset)
             
-            # Calcul de la taille de position avec sizing adaptatif
+            # Calcul de la taille de position avec sizing adaptatif ANTI-FRAGMENTATION
             position_size = self.calculate_position_size(symbol, volatility)
             
             self.logger.info(f"💰 Allocation avant trade {symbol}:")
-            self.logger.info(f"   📊 Capital total: {total_capital:.2f} EUR")
-            self.logger.info(f"   💶 EUR disponible: {eur_balance:.2f} EUR")
-            self.logger.info(f"   🎯 Taille position: {position_size:.2f} EUR (volatilité: {volatility:.2f}%)")
-            self.logger.info(f"   📈 Exposition {base_asset} actuelle: {current_exposure:.2f} EUR")
+            self.logger.info(f"   📊 Capital total: {total_capital:.2f} USDC")
+            self.logger.info(f"   � USDC disponible: {usdc_balance:.2f} USDC")
+            self.logger.info(f"   🎯 Taille position: {position_size:.2f} USDC (volatilité: {volatility:.2f}%)")
+            self.logger.info(f"   📈 Exposition {base_asset} actuelle: {current_exposure:.2f} USDC")
             self.logger.info(f"   🏦 Positions ouvertes: {len(self.open_positions)}")
             
             # Récupération du prix actuel
@@ -475,7 +513,7 @@ class ScalpingBot:
                 if adjusted_quantity > 0:
                     quantity = adjusted_quantity
                     position_size = quantity * current_price  # Recalcul du capital engagé
-                    self.logger.info(f"🔧 Quantité ajustée: {quantity:.8f} (capital: {position_size:.2f} EUR)")
+                    self.logger.info(f"🔧 Quantité ajustée: {quantity:.8f} (capital: {position_size:.2f} USDC)")
                 else:
                     self.logger.error(f"❌ Impossible de trader {symbol}: quantité minimale non respectée")
                     return
@@ -483,11 +521,18 @@ class ScalpingBot:
             # Arrondi final selon les règles de la paire
             quantity = self.round_quantity(symbol, quantity)
             
-            # Vérification finale de la valeur notionnelle
+            # Vérification finale ANTI-FRAGMENTATION
             final_notional = quantity * current_price
-            if final_notional < 10.0:  # Minimum Binance général
-                self.logger.warning(f"⚠️ Valeur notionnelle trop faible pour {symbol}: {final_notional:.2f} EUR < 10 EUR")
+            min_trade_size = getattr(self.config, 'MIN_POSITION_SIZE_USDC', 500.0)
+            
+            if final_notional < min_trade_size:
+                self.logger.warning(f"🚫 Trade {symbol} bloqué - Taille insuffisante: {final_notional:.2f}€ < {min_trade_size}€ (ANTI-FRAGMENTATION)")
                 return
+            
+            # Enregistrement du timestamp pour éviter la fragmentation
+            self.last_trade_time[symbol] = datetime.now()
+            
+            self.logger.info(f"✅ Trade {symbol} validé - Taille: {final_notional:.2f}€ (>{min_trade_size}€)")
             
             # Capital avant trade (AVANT l'achat)
             capital_before_trade = self.get_total_capital()
@@ -520,21 +565,21 @@ class ScalpingBot:
             
             # Logging
             self.logger.info(f"📈 Trade ouvert : {symbol}")
-            self.logger.info(f"   💰 Prix d'entrée: {current_price:.4f} EUR")
+            self.logger.info(f"   💰 Prix d'entrée: {current_price:.4f} USDC")
             self.logger.info(f"   📊 Quantité: {quantity:.6f}")
-            self.logger.info(f"   🛑 Stop Loss: {stop_loss:.4f} EUR (-{self.config.STOP_LOSS_PERCENT}%)")
-            self.logger.info(f"   🎯 Take Profit: {take_profit:.4f} EUR (+{self.config.TAKE_PROFIT_PERCENT}%)")
-            self.logger.info(f"   💵 Capital engagé: {position_size:.2f} EUR")
+            self.logger.info(f"   🛑 Stop Loss: {stop_loss:.4f} USDC (-{self.config.STOP_LOSS_PERCENT}%)")
+            self.logger.info(f"   🎯 Take Profit: {take_profit:.4f} USDC (+{self.config.TAKE_PROFIT_PERCENT}%)")
+            self.logger.info(f"   💵 Capital engagé: {position_size:.2f} USDC")
             
             # Notification Telegram
             await self.telegram_notifier.send_trade_open_notification(trade, position_size)
             
             # Log dans Google Sheets (si activé)
             if self.sheets_logger:
-                # Capital après = EUR total + crypto existant APRÈS l'achat
+                # Capital après = USDC total + crypto existant APRÈS l'achat
                 capital_after_trade = self.get_total_capital()
                 
-                self.logger.info(f"📊 Google Sheets - Capital avant: {capital_before_trade:.2f} EUR, après: {capital_after_trade:.2f} EUR (différence: {capital_after_trade - capital_before_trade:+.2f} EUR)")
+                self.logger.info(f"📊 Google Sheets - Capital avant: {capital_before_trade:.2f} USDC, après: {capital_after_trade:.2f} USDC (différence: {capital_after_trade - capital_before_trade:+.2f} USDC)")
                 await self.sheets_logger.log_trade(trade, "OPEN", capital_before_trade, capital_after_trade)
             
             # Enregistrement en base de données
@@ -576,15 +621,15 @@ class ScalpingBot:
             self.logger.debug(f"❌ Limite trades par paire atteinte: {len(trades_on_pair)}/{self.config.MAX_TRADES_PER_PAIR}")
             return False
         
-        # Vérification capital EUR disponible (pas le total avec crypto!)
+        # Vérification capital USDC disponible (pas le total avec crypto!)
         position_size = self.calculate_position_size()
-        eur_balance = self.get_asset_balance('EUR')
-        if eur_balance < position_size:
-            self.logger.debug(f"❌ Capital EUR insuffisant: {eur_balance:.2f} < {position_size:.2f}")
+        usdc_balance = self.get_asset_balance('USDC')
+        if usdc_balance < position_size:
+            self.logger.debug(f"❌ Capital USDC insuffisant: {usdc_balance:.2f} < {position_size:.2f}")
             return False
         
         # Vérification exposition maximale par asset de base
-        base_asset = symbol.replace('EUR', '')
+        base_asset = symbol.replace('USDC', '')
         current_exposure = self.get_asset_exposure(base_asset)
         max_exposure_per_asset = self.get_total_capital() * self.config.MAX_EXPOSURE_PER_ASSET_PERCENT / 100
         
@@ -605,7 +650,7 @@ class ScalpingBot:
         
         # 1. Exposition des positions ouvertes tracées par le bot
         for trade_id, trade in self.open_positions.items():
-            if trade.pair.replace('EUR', '') == base_asset:
+            if trade.pair.replace('USDC', '') == base_asset:
                 try:
                     ticker = self.binance_client.get_symbol_ticker(symbol=trade.pair)
                     current_price = float(ticker['price'])
@@ -621,24 +666,28 @@ class ScalpingBot:
         try:
             existing_balance = self.get_asset_balance(base_asset)
             if existing_balance > 0.00001:  # Seuil pour éviter les poussières
-                symbol = base_asset + 'EUR'
+                symbol = base_asset + 'USDC'
                 ticker = self.binance_client.get_symbol_ticker(symbol=symbol)
                 current_price = float(ticker['price'])
                 existing_value = existing_balance * current_price
                 total_exposure += existing_value
                 
-                self.logger.debug(f"💎 Exposition {base_asset}: Positions ouvertes: {total_exposure - existing_value:.2f} EUR + Solde existant: {existing_value:.2f} EUR = Total: {total_exposure:.2f} EUR")
+                self.logger.debug(f"💎 Exposition {base_asset}: Positions ouvertes: {total_exposure - existing_value:.2f} USDC + Solde existant: {existing_value:.2f} USDC = Total: {total_exposure:.2f} USDC")
         except Exception as e:
             self.logger.error(f"❌ Erreur calcul exposition solde existant {base_asset}: {e}")
         
         return total_exposure
 
     def calculate_position_size(self, pair: Optional[str] = None, volatility: Optional[float] = None) -> float:
-        """Calcule la taille de position avec sizing adaptatif basé sur la volatilité"""
+        """Calcule la taille de position avec sizing adaptatif basé sur la volatilité et horaires"""
         total_capital = self.get_total_capital()
         base_size = total_capital * self.config.BASE_POSITION_SIZE_PERCENT / 100
         
-        # Si pas de volatilité fournie, utiliser la taille de base
+        # Ajustement selon l'intensité horaire
+        trading_intensity = get_trading_intensity(self.config)
+        base_size *= trading_intensity
+        
+        # Si pas de volatilité fournie, utiliser la taille de base ajustée
         if volatility is None:
             return base_size
         
@@ -647,15 +696,15 @@ class ScalpingBot:
             # Réduire la taille pour paires très volatiles
             reduction_factor = min(0.5, self.config.VOLATILITY_REDUCTION_FACTOR * (volatility / self.config.HIGH_VOLATILITY_THRESHOLD))
             adjusted_size = base_size * (1 - reduction_factor)
-            self.logger.info(f"📊 Position réduite pour {pair} (volatilité {volatility:.2f}%): {adjusted_size:.2f} EUR")
+            self.logger.info(f"📊 Position réduite pour {pair} (volatilité {volatility:.2f}%, intensité {trading_intensity*100:.0f}%): {adjusted_size:.2f} USDC")
             return adjusted_size
         elif volatility < self.config.LOW_VOLATILITY_THRESHOLD:
             # Augmenter légèrement pour paires peu volatiles (plus sûres)
             adjusted_size = base_size * 1.1
-            self.logger.info(f"📊 Position augmentée pour {pair} (faible volatilité {volatility:.2f}%): {adjusted_size:.2f} EUR")
+            self.logger.info(f"📊 Position augmentée pour {pair} (faible volatilité {volatility:.2f}%, intensité {trading_intensity*100:.0f}%): {adjusted_size:.2f} USDC")
             return adjusted_size
         else:
-            # Volatilité normale, taille de base
+            # Volatilité normale, taille de base ajustée par horaire
             return base_size
 
     def round_quantity(self, symbol: str, quantity: float) -> float:
@@ -746,13 +795,13 @@ class ScalpingBot:
             return 0.0
 
     def get_total_capital(self) -> float:
-        """Calcule le capital total dynamique (EUR + valeur de TOUTES les cryptos du compte)"""
+        """Calcule le capital total dynamique (USDC + valeur de TOUTES les cryptos du compte)"""
         try:
             account_info = self.binance_client.get_account()
             total_capital = 0.0
             
-            # Solde EUR
-            eur_balance = 0.0
+            # Solde USDC
+            usdc_balance = 0.0
             crypto_value = 0.0
             
             for balance in account_info['balances']:
@@ -760,25 +809,25 @@ class ScalpingBot:
                 asset = balance['asset']
                 
                 if free_balance > 0:
-                    if asset == 'EUR':
-                        eur_balance = free_balance
-                        total_capital += eur_balance
+                    if asset == 'USDC':
+                        usdc_balance = free_balance
+                        total_capital += usdc_balance
                     elif free_balance > 0.00001:  # Seuil pour éviter les poussières
-                        # Conversion en EUR pour tous les autres assets
+                        # Conversion en USDC pour tous les autres assets
                         try:
-                            symbol = asset + 'EUR'
+                            symbol = asset + 'USDC'
                             ticker = self.binance_client.get_symbol_ticker(symbol=symbol)
-                            price_eur = float(ticker['price'])
-                            value_eur = free_balance * price_eur
-                            crypto_value += value_eur
-                            total_capital += value_eur
-                            self.logger.debug(f"💎 {asset}: {free_balance:.8f} x {price_eur:.4f} = {value_eur:.2f} EUR")
+                            price_usdc = float(ticker['price'])
+                            value_usdc = free_balance * price_usdc
+                            crypto_value += value_usdc
+                            total_capital += value_usdc
+                            self.logger.debug(f"💎 {asset}: {free_balance:.8f} x {price_usdc:.4f} = {value_usdc:.2f} USDC")
                         except Exception:
-                            # Si pas de paire EUR pour cet asset, on ignore
-                            self.logger.debug(f"⚠️ Pas de conversion EUR pour {asset}")
+                            # Si pas de paire USDC pour cet asset, on ignore
+                            self.logger.debug(f"⚠️ Pas de conversion USDC pour {asset}")
                             continue
             
-            self.logger.debug(f"💰 Capital total: {total_capital:.2f} EUR (EUR libre: {eur_balance:.2f}, Toutes cryptos: {crypto_value:.2f})")
+            self.logger.debug(f"💰 Capital total: {total_capital:.2f} USDC (USDC libre: {usdc_balance:.2f}, Toutes cryptos: {crypto_value:.2f})")
             return total_capital
             
         except Exception as e:
@@ -798,11 +847,11 @@ class ScalpingBot:
                 pnl_percent = (current_price - trade.entry_price) / trade.entry_price * 100
 
                 # Vérification surexposition dynamique
-                base_asset = trade.pair.replace('EUR', '')
+                base_asset = trade.pair.replace('USDC', '')
                 current_exposure = self.get_asset_exposure(base_asset)
                 max_exposure_per_asset = self.get_total_capital() * self.config.MAX_EXPOSURE_PER_ASSET_PERCENT / 100
                 if current_exposure > max_exposure_per_asset * 1.01:  # tolérance 1%
-                    self.logger.warning(f"⚠️ Surexposition détectée sur {base_asset}: {current_exposure:.2f} EUR > {max_exposure_per_asset:.2f} EUR ({self.config.MAX_EXPOSURE_PER_ASSET_PERCENT}% du capital)")
+                    self.logger.warning(f"⚠️ Surexposition détectée sur {base_asset}: {current_exposure:.2f} USDC > {max_exposure_per_asset:.2f} USDC ({self.config.MAX_EXPOSURE_PER_ASSET_PERCENT}% du capital)")
                     await self.close_position(trade_id, current_price, "SUREXPOSITION_AUTO")
                     continue
 
@@ -849,8 +898,8 @@ class ScalpingBot:
                         trade.take_profit = new_take_profit
                         
                         self.logger.info(f"📈 Trailing Stop mis à jour pour {trade.pair}:")
-                        self.logger.info(f"   🛑 Nouveau SL: {new_stop:.4f} EUR (ancien: {old_stop:.4f})")
-                        self.logger.info(f"   🎯 Nouveau TP: {new_take_profit:.4f} EUR (ancien: {old_tp:.4f})")
+                        self.logger.info(f"   🛑 Nouveau SL: {new_stop:.4f} USDC (ancien: {old_stop:.4f})")
+                        self.logger.info(f"   🎯 Nouveau TP: {new_take_profit:.4f} USDC (ancien: {old_tp:.4f})")
 
                         # Enregistrement en base de données
                         try:
@@ -878,8 +927,8 @@ class ScalpingBot:
             trade = self.open_positions[trade_id]
             symbol = trade.pair
             
-            # Récupération de l'asset de base (ex: ETH pour ETHEUR)
-            base_asset = symbol.replace('EUR', '')
+            # Récupération de l'asset de base (ex: ETH pour ETHUSDC)
+            base_asset = symbol.replace('USDC', '')
             
             # Vérification du solde disponible
             available_balance = self.get_asset_balance(base_asset)
@@ -969,7 +1018,7 @@ class ScalpingBot:
                 elif "min notional" in error_msg.lower() or error_code == -1013:
                     self.logger.error(f"❌ Valeur notionnelle trop faible pour {symbol}")
                     self.logger.error(f"   Quantité: {quantity_to_sell:.8f}, Prix: {exit_price:.8f}")
-                    self.logger.error(f"   Valeur: {quantity_to_sell * exit_price:.2f} EUR")
+                    self.logger.error(f"   Valeur: {quantity_to_sell * exit_price:.2f} USDC")
                     await self.close_position_virtually(symbol, exit_price, f"{reason}_MIN_NOTIONAL")
                     return
                 else:
@@ -1000,12 +1049,12 @@ class ScalpingBot:
             # Logging
             pnl_symbol = "🚀" if pnl_amount > 0 else "📉"
             self.logger.info(f"{pnl_symbol} Trade fermé : {symbol} ({reason})")
-            self.logger.info(f"   💰 Prix de sortie: {exit_price:.4f} EUR")
-            self.logger.info(f"   📊 P&L: {pnl_amount:+.2f} EUR ({pnl_percent:+.2f}%)")
+            self.logger.info(f"   💰 Prix de sortie: {exit_price:.4f} USDC")
+            self.logger.info(f"   📊 P&L: {pnl_amount:+.2f} USDC ({pnl_percent:+.2f}%)")
             self.logger.info(f"   ⏱️ Durée: {trade.duration}")
             total_capital = self.get_total_capital()
             daily_pnl_percent = self.daily_pnl / total_capital * 100
-            self.logger.info(f"   🔄 Total journalier: {self.daily_pnl:+.2f} EUR ({daily_pnl_percent:+.2f}%)")
+            self.logger.info(f"   🔄 Total journalier: {self.daily_pnl:+.2f} USDC ({daily_pnl_percent:+.2f}%)")
             
             # Notification Telegram
             total_capital = self.get_total_capital()
@@ -1040,7 +1089,7 @@ class ScalpingBot:
             trade = self.open_positions[trade_id]
             symbol = trade.pair
             
-            self.logger.warning(f"🔄 Fermeture virtuelle de {symbol} à {exit_price:.4f} EUR")
+            self.logger.warning(f"🔄 Fermeture virtuelle de {symbol} à {exit_price:.4f} USDC")
             
             # Mise à jour du trade
             trade.status = TradeStatus.CLOSED
@@ -1065,8 +1114,8 @@ class ScalpingBot:
             # Logging spécial pour fermeture virtuelle
             pnl_symbol = "⚠️" 
             self.logger.warning(f"{pnl_symbol} Trade fermé virtuellement : {symbol} ({reason})")
-            self.logger.warning(f"   💰 Prix de sortie: {exit_price:.4f} EUR")
-            self.logger.warning(f"   📊 P&L théorique: {pnl_amount:+.2f} EUR ({pnl_percent:+.2f}%)")
+            self.logger.warning(f"   💰 Prix de sortie: {exit_price:.4f} USDC")
+            self.logger.warning(f"   📊 P&L théorique: {pnl_amount:+.2f} USDC ({pnl_percent:+.2f}%)")
             self.logger.warning(f"   ⏱️ Durée: {trade.duration}")
             self.logger.warning(f"   ⚠️ ATTENTION: Fermeture virtuelle - vérifiez manuellement")
             
@@ -1208,7 +1257,7 @@ class ScalpingBot:
                 'current_capital': self.get_total_capital(),  # Capital total dynamique
                 'open_positions': len(self.open_positions),
                 'daily_pnl': self.daily_pnl,
-                'total_pnl': self.get_total_capital() - self.start_capital,  # P&L total par rapport au capital initial EUR
+                'total_pnl': self.get_total_capital() - self.start_capital,  # P&L total par rapport au capital initial USDC
                 'win_rate': win_rate,
                 'pairs_analyzed': [trade.pair for trade in self.open_positions.values()],
                 'top_pair': list(self.open_positions.values())[0].pair if self.open_positions else None
@@ -1231,7 +1280,7 @@ class ScalpingBot:
             if self.open_positions:
                 inconsistent_positions = []
                 for trade_id, trade in self.open_positions.items():
-                    base_asset = trade.pair.replace('EUR', '')
+                    base_asset = trade.pair.replace('USDC', '')
                     available_balance = balances.get(base_asset, 0)
                     
                     # Vérification si le solde est cohérent avec la position
@@ -1252,7 +1301,7 @@ class ScalpingBot:
             # 2. VÉRIFICATION CRITIQUE : Surexposition sur soldes existants
             overexposed_assets = []
             for asset, balance in balances.items():
-                if asset == 'EUR' or balance <= 0.00001:
+                if asset == 'USDC' or balance <= 0.00001:
                     continue
                     
                 try:
@@ -1282,15 +1331,15 @@ class ScalpingBot:
                     current_exposure = asset_info['current_exposure']
                     max_allowed = asset_info['max_allowed']
                     
-                    self.logger.warning(f"   🔥 {asset}: {current_exposure:.2f} EUR > {max_allowed:.2f} EUR (excès: {excess_eur:.2f} EUR)")
+                    self.logger.warning(f"   🔥 {asset}: {current_exposure:.2f} USDC > {max_allowed:.2f} USDC (excès: {excess_eur:.2f} USDC)")
                     
                     # Calculer quelle quantité vendre pour revenir dans la limite
                     try:
-                        symbol = asset + 'EUR'
+                        symbol = asset + 'USDC'
                         ticker = self.binance_client.get_symbol_ticker(symbol=symbol)
                         current_price = float(ticker['price'])
                         
-                        # Quantité à vendre = excès en EUR / prix actuel
+                        # Quantité à vendre = excès en USDC / prix actuel
                         quantity_to_sell = excess_eur / current_price
                         balance = asset_info['balance']
                         
@@ -1302,7 +1351,7 @@ class ScalpingBot:
                         quantity_to_sell = self.round_quantity(symbol, quantity_to_sell)
                         
                         if quantity_to_sell > 0:
-                            self.logger.warning(f"   🔧 VENTE FORCÉE {asset}: {quantity_to_sell:.8f} ({quantity_to_sell * current_price:.2f} EUR)")
+                            self.logger.warning(f"   🔧 VENTE FORCÉE {asset}: {quantity_to_sell:.8f} ({quantity_to_sell * current_price:.2f} USDC)")
                             
                             # Exécuter la vente d'urgence
                             try:
@@ -1311,14 +1360,14 @@ class ScalpingBot:
                                     quantity=quantity_to_sell
                                 )
                                 
-                                self.logger.info(f"✅ SUREXPOSITION CORRIGÉE: Vendu {quantity_to_sell:.8f} {asset} pour {quantity_to_sell * current_price:.2f} EUR")
+                                self.logger.info(f"✅ SUREXPOSITION CORRIGÉE: Vendu {quantity_to_sell:.8f} {asset} pour {quantity_to_sell * current_price:.2f} USDC")
                                 
                                 # Notification Telegram d'urgence
                                 message = f"🚨 CORRECTION SUREXPOSITION\n"
                                 message += f"Asset: {asset}\n"
-                                message += f"Vendu: {quantity_to_sell:.8f} ({quantity_to_sell * current_price:.2f} EUR)\n"
-                                message += f"Exposition avant: {current_exposure:.2f} EUR\n"
-                                message += f"Limite: {max_allowed:.2f} EUR"
+                                message += f"Vendu: {quantity_to_sell:.8f} ({quantity_to_sell * current_price:.2f} USDC)\n"
+                                message += f"Exposition avant: {current_exposure:.2f} USDC\n"
+                                message += f"Limite: {max_allowed:.2f} USDC"
                                 
                                 await self.telegram_notifier.send_message(message)
                                 
@@ -1330,20 +1379,20 @@ class ScalpingBot:
             
             # 4. Détection de soldes non tracés (positions fantômes inverses)
             for asset, balance in balances.items():
-                if asset == 'EUR' or balance <= 0.001:
+                if asset == 'USDC' or balance <= 0.001:
                     continue
                     
                 # Vérifier si on a un solde significatif sans position tracée
-                has_tracked_position = any(trade.pair.replace('EUR', '') == asset for trade in self.open_positions.values())
+                has_tracked_position = any(trade.pair.replace('USDC', '') == asset for trade in self.open_positions.values())
                 
                 if not has_tracked_position and balance > 0.001:
                     try:
-                        symbol = asset + 'EUR'
+                        symbol = asset + 'USDC'
                         ticker = self.binance_client.get_symbol_ticker(symbol=symbol)
                         current_price = float(ticker['price'])
-                        value_eur = balance * current_price
+                        value_usdc = balance * current_price
                         
-                        if value_eur > 100:  # Seuil significatif
+                        if value_usdc > 100:  # Seuil significatif
                             self.logger.warning(f"⚠️ Incohérence détectée: {asset} balance={balance:.6f} mais 0 positions en mémoire")
                             
                     except Exception:
@@ -1395,7 +1444,7 @@ class ScalpingBot:
         
         # Vérification supplémentaire via solde Binance
         try:
-            base_asset = symbol.replace('EUR', '')
+            base_asset = symbol.replace('USDC', '')
             binance_balance = self.get_asset_balance(base_asset)
             
             # Si on a un solde significatif mais pas de position en mémoire = incohérence
@@ -1428,7 +1477,7 @@ class ScalpingBot:
             return False, f"Limite positions totales atteinte ({total_open_positions}/{self.config.MAX_OPEN_POSITIONS})"
         
         # 4. VÉRIFICATION EXPOSITION : Contrôler AVANT + APRÈS la nouvelle position
-        base_asset = symbol.replace('EUR', '')
+        base_asset = symbol.replace('USDC', '')
         current_exposure = self.get_asset_exposure(base_asset)
         total_capital = self.get_total_capital()
         max_exposure_per_asset = total_capital * self.config.MAX_EXPOSURE_PER_ASSET_PERCENT / 100
@@ -1438,15 +1487,15 @@ class ScalpingBot:
         future_exposure = current_exposure + new_position_size
         
         if current_exposure > max_exposure_per_asset:
-            return False, f"Exposition {base_asset} déjà trop élevée ({current_exposure:.2f} EUR > {max_exposure_per_asset:.2f} EUR = {self.config.MAX_EXPOSURE_PER_ASSET_PERCENT}% du capital)"
+            return False, f"Exposition {base_asset} déjà trop élevée ({current_exposure:.2f} USDC > {max_exposure_per_asset:.2f} USDC = {self.config.MAX_EXPOSURE_PER_ASSET_PERCENT}% du capital)"
         
         if future_exposure > max_exposure_per_asset:
-            return False, f"Nouvelle position créerait surexposition {base_asset} ({current_exposure:.2f} + {new_position_size:.2f} = {future_exposure:.2f} EUR > {max_exposure_per_asset:.2f} EUR = {self.config.MAX_EXPOSURE_PER_ASSET_PERCENT}% du capital)"
+            return False, f"Nouvelle position créerait surexposition {base_asset} ({current_exposure:.2f} + {new_position_size:.2f} = {future_exposure:.2f} USDC > {max_exposure_per_asset:.2f} USDC = {self.config.MAX_EXPOSURE_PER_ASSET_PERCENT}% du capital)"
         
-        # 5. VÉRIFICATION CAPITAL : Capital EUR minimum disponible avec marge
-        eur_balance = self.get_asset_balance('EUR')
-        if eur_balance < new_position_size * 1.1:  # Marge de sécurité 10%
-            return False, f"Capital EUR insuffisant ({eur_balance:.2f} < {new_position_size * 1.1:.2f} EUR requis)"
+        # 5. VÉRIFICATION CAPITAL : Capital USDC minimum disponible avec marge
+        usdc_balance = self.get_asset_balance('USDC')
+        if usdc_balance < new_position_size * 1.1:  # Marge de sécurité 10%
+            return False, f"Capital USDC insuffisant ({usdc_balance:.2f} < {new_position_size * 1.1:.2f} USDC requis)"
         
         return True, "OK"
 
@@ -1519,3 +1568,26 @@ class ScalpingBot:
         except Exception as e:
             self.logger.error(f"❌ Erreur vérification momentum {trade.pair}: {e}")
             return False, ""
+
+    async def check_market_volatility(self, top_pairs: List):
+        """Vérifie la volatilité moyenne du marché et envoie des notifications"""
+        try:
+            if not top_pairs:
+                return
+            
+            # Calcul de la volatilité moyenne des top paires
+            volatilities = [pair.volatility for pair in top_pairs if hasattr(pair, 'volatility')]
+            
+            if not volatilities:
+                return
+            
+            avg_volatility = sum(volatilities) / len(volatilities)
+            
+            # Notification de volatilité via le notificateur d'horaires
+            await self.hours_notifier.check_volatility_and_notify(avg_volatility)
+            
+            # Log pour suivi
+            self.logger.debug(f"📊 Volatilité moyenne marché: {avg_volatility:.2f}% (sur {len(volatilities)} paires)")
+            
+        except Exception as e:
+            self.logger.error(f"❌ Erreur vérification volatilité marché: {e}")

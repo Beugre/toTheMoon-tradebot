@@ -93,9 +93,9 @@ class TelegramNotifier:
         message = f"""
 🚀 **Bot de Trading Scalping Démarré**
 
-💰 **Capital initial:** {capital:.2f} EUR
-🎯 **Objectif quotidien:** +{daily_target_percent}% = +{capital * daily_target_percent / 100:.2f} EUR
-🛑 **Stop loss quotidien:** -{daily_stop_percent}% = -{capital * daily_stop_percent / 100:.2f} EUR
+💰 **Capital initial:** {capital:.2f} USDC
+🎯 **Objectif quotidien:** +{daily_target_percent}% = +{capital * daily_target_percent / 100:.2f} USDC
+🛑 **Stop loss quotidien:** -{daily_stop_percent}% = -{capital * daily_stop_percent / 100:.2f} USDC
 📊 **Taille position:** {position_size_percent}% du capital
 🔢 **Max positions:** {max_positions} simultanées
 
@@ -120,12 +120,12 @@ class TelegramNotifier:
         message = f"""
 📈 **Trade Ouvert - {trade.pair}**
 
-💰 **Prix d'entrée:** {trade.entry_price:.4f} EUR
+💰 **Prix d'entrée:** {trade.entry_price:.4f} USDC
 📊 **Quantité:** {trade.size:.6f}
-💵 **Capital engagé:** {capital_engaged:.2f} EUR
+💵 **Capital engagé:** {capital_engaged:.2f} USDC
 
-🛑 **Stop Loss:** {trade.stop_loss:.4f} EUR (-{stop_loss_percent}%)
-🎯 **Take Profit:** {trade.take_profit:.4f} EUR (+{take_profit_percent}%)
+🛑 **Stop Loss:** {trade.stop_loss:.4f} USDC (-{stop_loss_percent}%)
+🎯 **Take Profit:** {trade.take_profit:.4f} USDC (+{take_profit_percent}%)
 🔄 **Trailing Stop:** Actif à +{trailing_stop_percent}%
 
 ⏰ **Ouverture:** {trade.timestamp.strftime('%H:%M:%S')}
@@ -148,12 +148,12 @@ class TelegramNotifier:
         message = f"""
 {result_emoji} **Trade Fermé - {trade.pair}**
 
-💰 **Prix de sortie:** {trade.exit_price:.4f} EUR
-📊 **Résultat:** {pnl_amount:+.2f} EUR ({pnl_percent:+.2f}%)
+💰 **Prix de sortie:** {trade.exit_price:.4f} USDC
+📊 **Résultat:** {pnl_amount:+.2f} USDC ({pnl_percent:+.2f}%)
 ⏱️ **Durée:** {trade.duration}
 🔄 **Raison:** {trade.exit_reason}
 
-📈 **Total journalier:** {daily_pnl:+.2f} EUR
+📈 **Total journalier:** {daily_pnl:+.2f} USDC
 💎 **Performance:** {daily_pnl_percent:+.2f}% (capital dynamique)
 
 ⏰ **Fermeture:** {trade.exit_timestamp.strftime('%H:%M:%S')}
@@ -195,10 +195,10 @@ class TelegramNotifier:
         message = f"""
 {status_emoji} **Résumé Quotidien - {status}**
 
-💰 **P&L:** {daily_pnl:+.2f} EUR ({pnl_percent:+.2f}%)
+💰 **P&L:** {daily_pnl:+.2f} USDC ({pnl_percent:+.2f}%)
 📊 **Trades exécutés:** {trades_count}
-💵 **Capital total:** {total_capital:.2f} EUR
-💎 **Capital final:** {total_capital:.2f} EUR
+💵 **Capital total:** {total_capital:.2f} USDC
+💎 **Capital final:** {total_capital:.2f} USDC
 
 📈 **Performance:** {pnl_percent:+.2f}% de rendement
 
@@ -273,8 +273,8 @@ class TelegramNotifier:
         message = f"""
 {pnl_emoji} **Mise à jour Position - {pair}**
 
-💰 **P&L actuel:** {current_pnl:+.2f} EUR
-🔄 **Trailing Stop:** {trailing_stop:.4f} EUR
+💰 **P&L actuel:** {current_pnl:+.2f} USDC
+🔄 **Trailing Stop:** {trailing_stop:.4f} USDC
 
 ⏰ **Mise à jour:** {datetime.now().strftime('%H:%M:%S')}
 """
