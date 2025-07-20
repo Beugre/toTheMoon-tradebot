@@ -1,42 +1,12 @@
-# Requirements pour le Bot de Trading Scalping
+# Dépendances Dashboard Streamlit Cloud
+# Ce fichier est utilisé automatiquement par Streamlit Cloud
 
-# Trading & APIs
-python-binance==1.0.19
-ccxt==4.1.52
-
-# Analyse technique
-pandas==2.1.4
-numpy==1.24.4
-TA-Lib==0.4.28
-
-# Notifications
-python-telegram-bot==20.7
-
-# Google Sheets
-gspread==5.12.0
-oauth2client==4.1.3
-
-# Firebase Real-time Analytics
-firebase-admin==6.4.0
-
-# Utilitaires
-asyncio-mqtt==0.13.0
-aiofiles==23.2.1
-python-dotenv==1.0.0
-
-# Logging et monitoring
-colorama==0.4.6
-rich==13.7.0
-
-# Configuration
-pydantic==2.5.2
-pydantic-settings==2.1.0
-
-# Tests
-pytest==7.4.3
-pytest-asyncio==0.21.1
-
-# Développement
-black==23.12.0
-flake8==6.1.0
-mypy==1.8.0
+streamlit>=1.28.0
+plotly>=5.15.0
+pandas>=2.1.0,<2.3.0
+numpy>=1.26.0,<2.0.0
+firebase-admin>=6.2.0
+python-dateutil>=2.8.0
+pytz>=2021.1
+requests>=2.28.0
+urllib3>=1.26.0

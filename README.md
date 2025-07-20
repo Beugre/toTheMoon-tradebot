@@ -5,7 +5,25 @@ Bot de trading automatisé ultra-sophistiqué spécialisé dans le scalping EUR 
 ## ✨ Fonctionnalités Avancées
 
 ### 🎯 Trading Automatisé Intelligent
-- **Multi-paires EUR optimisées** : Sélection dynamique des top 5 paires les plus performantes
+- **Mu## 📁 Structure des Fichiers
+
+### 🤖 **Bot de Trading**
+- `requirements_bot_production.txt` - Dépendances du bot (VPS/local)
+- `main.py` - Bot principal
+- `.env` - Configuration des clés API
+
+### 📊 **Dashboard Streamlit**
+- `requirements.txt` - Dépendances dashboard (Streamlit Cloud) 
+- `packages.txt` - Backup des dépendances dashboard
+- `dashboard.py` - Interface web temps réel
+- `dashboard_demo.py` - Version demo avec données test
+
+### ⚙️ **Scripts Utilitaires**
+- `validate_firebase.py` - Test connexion Firebase
+- `generate_sample_data.py` - Génération de données test
+- `deploy_ultra_simple.ps1` - Déploiement VPS simplifié
+
+> **Note** : `requirements.txt` optimisé pour Streamlit Cloud | Bot utilise `requirements_bot_production.txt`imisées** : Sélection dynamique des top 5 paires les plus performantes
 - **Signaux techniques convergents** : EMA crossover + MACD + RSI rebond confirmé + Bollinger Bands
 - **Scalping ultra-précis** : Timeframe 1 minute pour capter les micro-mouvements
 - **Scoring automatique** : Système de notation des paires par performance et volume
