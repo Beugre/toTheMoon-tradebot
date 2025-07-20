@@ -1,0 +1,12 @@
+# Dépendances Dashboard Streamlit Cloud
+# Ce fichier est utilisé automatiquement par Streamlit Cloud
+
+streamlit>=1.28.0
+plotly>=5.15.0
+pandas>=2.1.0,<2.3.0
+numpy>=1.26.0,<2.0.0
+firebase-admin>=6.2.0
+python-dateutil>=2.8.0
+pytz>=2021.1
+requests>=2.28.0
+urllib3>=1.26.0

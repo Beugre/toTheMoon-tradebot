@@ -18,6 +18,9 @@ firebase_credentials.json
 *.json
 !requirements.json
 
+# Streamlit config (garder config.toml pour le cloud)
+!.streamlit/config.toml
+
 # Cache Python
 __pycache__/
 *.py[cod]

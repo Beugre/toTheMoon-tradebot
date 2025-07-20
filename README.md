@@ -297,7 +297,26 @@ scp root@YOUR_VPS:/opt/toTheMoon_tradebot/data/trading_bot.db ./backups/
 
 Ce projet est sous licence MIT. Voir le fichier [LICENSE](LICENSE) pour plus de détails.
 
-## 💡 Support
+## � Structure des Fichiers
+
+### 🤖 **Bot de Trading**
+- `requirements.txt` - Dépendances du bot (VPS/local)
+- `main.py` - Bot principal
+- `.env` - Configuration des clés API
+
+### 📊 **Dashboard Streamlit**
+- `packages.txt` - Dépendances dashboard (Streamlit Cloud)
+- `dashboard.py` - Interface web temps réel
+- `dashboard_demo.py` - Version demo avec données test
+
+### ⚙️ **Scripts Utilitaires**
+- `validate_firebase.py` - Test connexion Firebase
+- `generate_sample_data.py` - Génération de données test
+- `deploy_ultra_simple.ps1` - Déploiement VPS simplifié
+
+> **Note** : `requirements.txt` = Bot | `packages.txt` = Dashboard Cloud
+
+## �💡 Support
 
 - **Issues GitHub** : Pour les bugs et demandes de fonctionnalités
 - **Discussions** : Pour les questions et discussions

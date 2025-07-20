@@ -3,9 +3,10 @@ Script de déploiement pour Streamlit Cloud
 Prépare le repo pour le déploiement
 """
 
-import os
 import json
+import os
 import subprocess
+
 
 def prepare_deployment():
     """Prépare le déploiement Streamlit Cloud"""
