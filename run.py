@@ -37,7 +37,7 @@ def main():
         asyncio.run(bot.start())
     except KeyboardInterrupt:
         logger.info("\\n🛑 Arrêt du bot demandé par l'utilisateur")
-        asyncio.run(bot.stop())
+        asyncio.run(bot.stop()) # type: ignore
     except Exception as e:
         logger.error(f"❌ Erreur critique: {e}")
         return 1
