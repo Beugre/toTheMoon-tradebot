@@ -390,11 +390,15 @@ class EnhancedSheetsLogger:
         except Exception as e:
             self.logger.error(f"❌ Erreur logging trade enhanced {action}: {e}")
         
-        # NOUVEAU: Force le recalcul automatique après chaque trade
+        # NOUVEAU: Force le recalcul automatique après chaque trade (avec gestion d'erreur)
         try:
             await self.force_calculations_after_trade()
+        except APIError as e: # type: ignore
+            self.logger.warning(f"⚠️ Erreur API Google Sheets (recalcul): {e}")
+            # Ne pas interrompre le trading pour des erreurs Sheets
         except Exception as e:
             self.logger.warning(f"⚠️ Erreur recalcul automatique: {e}")
+            # Continuer le trading même si Sheets a des problèmes
 
     async def force_calculations_after_trade(self):
         """Force le recalcul des métriques après ajout d'un trade"""
@@ -427,12 +431,29 @@ class EnhancedSheetsLogger:
             losing_trades = len([pnl for pnl in pnl_values if pnl < 0])
             win_rate = (winning_trades / total_trades * 100) if total_trades > 0 else 0
             
-            # Mise à jour rapide des métriques principales
-            summary_sheet.update('B4', total_trades)
-            summary_sheet.update('B5', winning_trades)
-            summary_sheet.update('B6', losing_trades)
-            summary_sheet.update('B7', f"{win_rate:.1f}")
-            summary_sheet.update('B8', f"{total_pnl:.2f}")
+            # Mise à jour rapide des métriques principales avec gestion d'erreur
+            try:
+                summary_sheet.update('B4', [[total_trades]])
+                summary_sheet.update('B5', [[winning_trades]])
+                summary_sheet.update('B6', [[losing_trades]])
+                summary_sheet.update('B7', [[f"{win_rate:.1f}"]])
+                summary_sheet.update('B8', [[f"{total_pnl:.2f}"]])
+                self.logger.debug("📊 Métriques Performance_Summary mises à jour")
+            except APIError as e: # type: ignore
+                self.logger.warning(f"⚠️ Erreur mise à jour métriques summary: {e}")
+                # Fallback : mise à jour par batch
+                try:
+                    summary_values = [
+                        [total_trades],
+                        [winning_trades], 
+                        [losing_trades],
+                        [f"{win_rate:.1f}"],
+                        [f"{total_pnl:.2f}"]
+                    ]
+                    summary_sheet.update('B4:B8', summary_values)
+                    self.logger.debug("📊 Métriques summary mises à jour en batch")
+                except Exception as fallback_error:
+                    self.logger.error(f"❌ Erreur fallback mise à jour summary: {fallback_error}")
             
             # 2. Mise à jour Pairs_Analysis pour les paires actives
             pairs_sheet = self.spreadsheet.worksheet("Pairs_Analysis") # type: ignore
@@ -476,11 +497,23 @@ class EnhancedSheetsLogger:
                             # Recommandation
                             recommendation = "HIGH" if win_rate_pair > 60 else "MEDIUM" if win_rate_pair > 30 else "LOW"
                             
-                            # Mise à jour rapide
-                            pairs_sheet.update(f'B{row_num}', nb_trades)
-                            pairs_sheet.update(f'C{row_num}', f"{win_rate_pair:.1f}")
-                            pairs_sheet.update(f'D{row_num}', f"{total_pnl_pair:.2f}")
-                            pairs_sheet.update(f'I{row_num}', recommendation)
+                            # Mise à jour rapide avec format liste correct
+                            try:
+                                pairs_sheet.update(f'B{row_num}', [[nb_trades]])
+                                pairs_sheet.update(f'C{row_num}', [[f"{win_rate_pair:.1f}"]])
+                                pairs_sheet.update(f'D{row_num}', [[f"{total_pnl_pair:.2f}"]])
+                                pairs_sheet.update(f'I{row_num}', [[recommendation]])
+                            except APIError as e: # type: ignore
+                                self.logger.warning(f"⚠️ Erreur mise à jour paire {pair}: {e}")
+                                # Fallback : mise à jour par batch
+                                try:
+                                    pair_values = [
+                                        [nb_trades, f"{win_rate_pair:.1f}", f"{total_pnl_pair:.2f}", "", "", "", "", "", recommendation]
+                                    ]
+                                    pairs_sheet.update(f'B{row_num}:J{row_num}', pair_values)
+                                except Exception:
+                                    self.logger.warning(f"⚠️ Impossible de mettre à jour {pair}")
+                                    pass
             
             self.logger.debug("📊 Recalcul automatique effectué")
             
