@@ -18,7 +18,6 @@ import ccxt
 import gspread
 import numpy as np
 import pandas as pd
-import talib
 # Notifications & Logging
 import telegram
 from binance.client import Client
@@ -27,6 +26,9 @@ from binance.enums import (ORDER_TYPE_LIMIT, ORDER_TYPE_MARKET, SIDE_BUY, SIDE_S
 from binance.exceptions import BinanceAPIException, BinanceOrderException
 from oauth2client.service_account import ServiceAccountCredentials
 from telegram import Bot
+
+# Import des indicateurs manuels en remplacement de TA-Lib
+from utils.manual_indicators import ManualIndicators
 
 # Configuration
 from config import API_CONFIG, TradingConfig
@@ -277,6 +279,17 @@ class ScalpingBot:
                 if not is_trading_hours_active(self.config):
                     hours_status = get_hours_status_message(self.config)
                     self.logger.info(f"⏰ {hours_status}")
+                    
+                    # 🔥 LOG FIREBASE: Statut hors horaires
+                    if self.firebase_logger:
+                        self.firebase_logger.log_message(
+                            level="INFO",
+                            message=hours_status,
+                            module="trading_hours",
+                            capital=self.get_total_capital(),
+                            additional_data={'trading_active': False, 'positions_open': len(self.open_positions)}
+                        )
+                    
                     await asyncio.sleep(300)  # Attendre 5 minutes si hors horaires
                     continue
                 
@@ -408,6 +421,21 @@ class ScalpingBot:
             for i, pair in enumerate(top_pairs):
                 self.logger.info(f"  {i+1}. {pair.pair} - Score: {pair.score:.2f} - Vol: {pair.volatility:.2f}% - Volume: {pair.volume/1000000:.1f}M USDC")
             
+            # 🔥 LOG FIREBASE: Résultat du scan des paires
+            if self.firebase_logger and top_pairs:
+                top_3_pairs = [f"{p.pair}({p.score:.1f})" for p in top_pairs[:3]]
+                self.firebase_logger.log_message(
+                    level="INFO",
+                    message=f"📊 Scan terminé: {len(pair_scores)} paires analysées, Top 3: {', '.join(top_3_pairs)}",
+                    module="pair_scanner",
+                    additional_data={
+                        'total_pairs_scanned': len(pair_scores),
+                        'top_pairs_selected': len(top_pairs),
+                        'best_pair': top_pairs[0].pair if top_pairs else None,
+                        'best_score': top_pairs[0].score if top_pairs else 0
+                    }
+                )
+            
             return top_pairs
             
         except Exception as e:
@@ -426,12 +454,12 @@ class ScalpingBot:
             if len(klines) < period:
                 return 0.0
             
-            high = np.array([float(k[2]) for k in klines])
-            low = np.array([float(k[3]) for k in klines])
-            close = np.array([float(k[4]) for k in klines])
+            high = pd.Series([float(k[2]) for k in klines])
+            low = pd.Series([float(k[3]) for k in klines])
+            close = pd.Series([float(k[4]) for k in klines])
             
-            atr = talib.ATR(high, low, close, timeperiod=period) # type: ignore
-            return atr[-1] if not np.isnan(atr[-1]) else 0.0
+            atr = ManualIndicators.ATR(high, low, close, timeperiod=period)
+            return atr.iloc[-1] if not np.isnan(atr.iloc[-1]) else 0.0
             
         except Exception as e:
             self.logger.error(f"❌ Erreur calcul ATR pour {symbol}: {e}")
@@ -471,6 +499,33 @@ class ScalpingBot:
                 self.logger.info(f"   ⚡ Momentum: {analysis.momentum}")
                 self.logger.info(f"   📊 Conditions validées: {len(analysis.signals)}/{self.config.MIN_SIGNAL_CONDITIONS}")
                 
+                # Firebase logging pour signal valide
+                if self.firebase_logger:
+                    signals_list = []
+                    for signal in analysis.signals:
+                        signals_list.append({
+                            'indicator': signal.indicator,
+                            'description': signal.description,
+                            'strength': signal.strength.name
+                        })
+                    
+                    self.firebase_logger.log_message(
+                        level="INFO",
+                        message=f"✅ SIGNAL VALIDE DÉTECTÉ: {symbol} (Score: {analysis.total_score:.1f})",
+                        module="signal_detection",
+                        pair=symbol,
+                        additional_data={
+                            'symbol': symbol,
+                            'total_score': analysis.total_score,
+                            'recommendation': analysis.recommendation,
+                            'trend': analysis.trend,
+                            'momentum': analysis.momentum,
+                            'conditions_count': len(analysis.signals),
+                            'min_conditions': self.config.MIN_SIGNAL_CONDITIONS,
+                            'signals': signals_list
+                        }
+                    )
+                
                 # Log des signaux détectés
                 for signal in analysis.signals:
                     strength_emoji = {"WEAK": "🟡", "MODERATE": "🟠", "STRONG": "🔴", "VERY_STRONG": "🟣"}
@@ -485,11 +540,47 @@ class ScalpingBot:
                 self.logger.info(f"   🎯 Recommandation: {analysis.recommendation}")
                 for signal in analysis.signals[:3]:  # Max 3 signaux pour éviter spam
                     self.logger.info(f"   - {signal.indicator}: {signal.description}")
+                    
+                # Firebase logging pour signal insuffisant
+                if self.firebase_logger:
+                    signals_list = []
+                    for signal in analysis.signals[:3]:
+                        signals_list.append({
+                            'indicator': signal.indicator,
+                            'description': signal.description,
+                            'strength': signal.strength.name
+                        })
+                    
+                    self.firebase_logger.log_message(
+                        level="WARNING",
+                        message=f"⚠️ SIGNAL INSUFFISANT: {symbol} ({len(analysis.signals)}/{self.config.MIN_SIGNAL_CONDITIONS})",
+                        module="signal_detection",
+                        pair=symbol,
+                        additional_data={
+                            'symbol': symbol,
+                            'total_score': analysis.total_score,
+                            'recommendation': analysis.recommendation,
+                            'conditions_count': len(analysis.signals),
+                            'min_conditions': self.config.MIN_SIGNAL_CONDITIONS,
+                            'signals': signals_list
+                        }
+                    )
             
             return None
             
         except Exception as e:
             self.logger.error(f"❌ Erreur analyse {symbol}: {e}")
+            
+            # Firebase logging pour erreur d'analyse
+            if self.firebase_logger:
+                self.firebase_logger.log_message(
+                    level="ERROR",
+                    message=f"❌ ERREUR ANALYSE: {symbol} - {str(e)}",
+                    module="signal_detection",
+                    pair=symbol,
+                    additional_data={'error': str(e)}
+                )
+            
             return None
 
     async def execute_trade(self, symbol: str, direction: TradeDirection):
@@ -501,6 +592,21 @@ class ScalpingBot:
                 time_since_last = (now - self.last_trade_time[symbol]).total_seconds()
                 if time_since_last < self.config.MIN_TRADE_INTERVAL_SECONDS:
                     self.logger.info(f"🚫 Trade {symbol} bloqué - Trop récent ({time_since_last:.0f}s < {self.config.MIN_TRADE_INTERVAL_SECONDS}s)")
+                    
+                    # Firebase logging pour trade bloqué
+                    if self.firebase_logger:
+                        self.firebase_logger.log_message(
+                            level="WARNING",
+                            message=f"🚫 TRADE BLOQUÉ: {symbol} - Trop récent",
+                            module="trade_execution",
+                            pair=symbol,
+                            additional_data={
+                                'time_since_last': time_since_last,
+                                'min_interval': self.config.MIN_TRADE_INTERVAL_SECONDS,
+                                'reason': 'anti_fragmentation'
+                            }
+                        )
+                    
                     return
             
             # Calculer la volatilité pour cette paire
@@ -510,6 +616,20 @@ class ScalpingBot:
             can_open, reason = self.can_open_position_enhanced(symbol, volatility)
             if not can_open:
                 self.logger.info(f"❌ Trade {symbol} refusé: {reason}")
+                
+                # Firebase logging pour trade refusé
+                if self.firebase_logger:
+                    self.firebase_logger.log_message(
+                        level="WARNING",
+                        message=f"❌ TRADE REFUSÉ: {symbol} - {reason}",
+                        module="trade_execution",
+                        pair=symbol,
+                        additional_data={
+                            'volatility': volatility,
+                            'reason': reason
+                        }
+                    )
+                
                 return
             
             # Informations d'allocation avant trade
@@ -527,6 +647,25 @@ class ScalpingBot:
             self.logger.info(f"   🎯 Taille position: {position_size:.2f} USDC (volatilité: {volatility:.2f}%)")
             self.logger.info(f"   📈 Exposition {base_asset} actuelle: {current_exposure:.2f} USDC")
             self.logger.info(f"   🏦 Positions ouvertes: {len(self.open_positions)}")
+            
+            # Firebase logging pour allocation avant trade
+            if self.firebase_logger:
+                self.firebase_logger.log_message(
+                    level="INFO",
+                    message=f"💰 ALLOCATION AVANT TRADE: {symbol}",
+                    module="trade_execution",
+                    pair=symbol,
+                    capital=total_capital,
+                    additional_data={
+                        'total_capital': total_capital,
+                        'usdc_balance': usdc_balance,
+                        'position_size': position_size,
+                        'volatility': volatility,
+                        'current_exposure': current_exposure,
+                        'open_positions': len(self.open_positions),
+                        'base_asset': base_asset
+                    }
+                )
             
             # Récupération du prix actuel
             ticker = self.binance_client.get_symbol_ticker(symbol=symbol)
@@ -570,6 +709,24 @@ class ScalpingBot:
             
             self.logger.info(f"✅ Trade {symbol} validé - Taille: {final_notional:.2f}€ (>{min_trade_size}€)")
             
+            # Firebase logging pour trade validé
+            if self.firebase_logger:
+                self.firebase_logger.log_message(
+                    level="INFO",
+                    message=f"✅ TRADE VALIDÉ: {symbol} - Taille: {final_notional:.2f}€",
+                    module="trade_execution",
+                    pair=symbol,
+                    additional_data={
+                        'final_notional': final_notional,
+                        'min_trade_size': min_trade_size,
+                        'quantity': quantity,
+                        'current_price': current_price,
+                        'stop_loss': stop_loss,
+                        'take_profit': take_profit,
+                        'trailing_stop': trailing_stop
+                    }
+                )
+            
             # Capital avant trade (AVANT l'achat)
             capital_before_trade = self.get_total_capital()
             
@@ -606,6 +763,26 @@ class ScalpingBot:
             self.logger.info(f"   🛑 Stop Loss: {stop_loss:.4f} USDC (-{self.config.STOP_LOSS_PERCENT}%)")
             self.logger.info(f"   🎯 Take Profit: {take_profit:.4f} USDC (+{self.config.TAKE_PROFIT_PERCENT}%)")
             self.logger.info(f"   💵 Capital engagé: {position_size:.2f} USDC")
+            
+            # Firebase logging pour trade ouvert
+            if self.firebase_logger:
+                self.firebase_logger.log_message(
+                    level="INFO",
+                    message=f"📈 TRADE OUVERT: {symbol} - Prix: {current_price:.4f}",
+                    module="trade_execution",
+                    trade_id=trade_id,
+                    pair=symbol,
+                    capital=capital_before_trade,
+                    additional_data={
+                        'order_id': order['orderId'],
+                        'entry_price': current_price,
+                        'quantity': quantity,
+                        'stop_loss': stop_loss,
+                        'take_profit': take_profit,
+                        'position_size': position_size,
+                        'volatility': volatility
+                    }
+                )
             
             # Notification Telegram
             await self.telegram_notifier.send_trade_open_notification(trade, position_size)
@@ -979,6 +1156,26 @@ class ScalpingBot:
                         self.logger.info(f"📈 Trailing Stop mis à jour pour {trade.pair}:")
                         self.logger.info(f"   🛑 Nouveau SL: {new_stop:.4f} USDC (ancien: {old_stop:.4f})")
                         self.logger.info(f"   🎯 Nouveau TP: {new_take_profit:.4f} USDC (ancien: {old_tp:.4f})")
+                        
+                        # Firebase logging pour trailing stop
+                        if self.firebase_logger:
+                            profit_percent = (current_price - trade.entry_price) / trade.entry_price * 100
+                            self.firebase_logger.log_message(
+                                level="INFO",
+                                message=f"📈 TRAILING STOP: {trade.pair} - SL: {new_stop:.4f} (+{profit_percent:.2f}%)",
+                                module="position_management",
+                                trade_id=trade_id,
+                                pair=trade.pair,
+                                additional_data={
+                                    'old_stop_loss': old_stop,
+                                    'new_stop_loss': new_stop,
+                                    'old_take_profit': old_tp,
+                                    'new_take_profit': new_take_profit,
+                                    'trigger_price': current_price,
+                                    'profit_percent': profit_percent,
+                                    'entry_price': trade.entry_price
+                                }
+                            )
 
                         # Enregistrement en base de données
                         try:
@@ -1135,6 +1332,26 @@ class ScalpingBot:
             daily_pnl_percent = self.daily_pnl / total_capital * 100
             self.logger.info(f"   🔄 Total journalier: {self.daily_pnl:+.2f} USDC ({daily_pnl_percent:+.2f}%)")
             
+            # Firebase logging pour trade fermé
+            if self.firebase_logger:
+                self.firebase_logger.log_message(
+                    level="INFO",
+                    message=f"{pnl_symbol} TRADE FERMÉ: {symbol} - P&L: {pnl_amount:+.2f} USDC ({pnl_percent:+.2f}%)",
+                    module="trade_execution",
+                    trade_id=trade_id,
+                    pair=symbol,
+                    capital=total_capital,
+                    additional_data={
+                        'exit_price': exit_price,
+                        'exit_reason': reason,
+                        'pnl_amount': pnl_amount,
+                        'pnl_percent': pnl_percent,
+                        'duration_seconds': trade.duration.total_seconds() if trade.duration else 0,
+                        'daily_pnl': self.daily_pnl,
+                        'daily_trades': self.daily_trades
+                    }
+                )
+            
             # Notification Telegram
             total_capital = self.get_total_capital()
             await self.telegram_notifier.send_trade_close_notification(trade, pnl_amount, pnl_percent, self.daily_pnl, total_capital)
@@ -1268,6 +1485,28 @@ class ScalpingBot:
     async def handle_daily_stop(self):
         """Gère l'arrêt quotidien du bot"""
         self.logger.info("🛑 Conditions d'arrêt quotidien atteintes")
+        
+        # Firebase logging pour arrêt quotidien
+        if self.firebase_logger:
+            reason = "DAILY_TARGET" if self.daily_target_reached else "DAILY_STOP_LOSS"
+            total_capital = self.get_total_capital()
+            daily_pnl_percent = self.daily_pnl / total_capital * 100
+            
+            self.firebase_logger.log_message(
+                level="WARNING",
+                message=f"🛑 ARRÊT QUOTIDIEN: {reason} - P&L: {self.daily_pnl:+.2f} USDC ({daily_pnl_percent:+.2f}%)",
+                module="daily_management",
+                capital=total_capital,
+                additional_data={
+                    'reason': reason,
+                    'daily_pnl': self.daily_pnl,
+                    'daily_pnl_percent': daily_pnl_percent,
+                    'daily_trades': self.daily_trades,
+                    'open_positions_count': len(self.open_positions),
+                    'target_reached': self.daily_target_reached,
+                    'stop_loss_hit': self.daily_stop_loss_hit
+                }
+            )
         
         # Fermeture des positions ouvertes
         for trade_id in list(self.open_positions.keys()):
@@ -1775,6 +2014,22 @@ class ScalpingBot:
             
             # Log pour suivi
             self.logger.debug(f"📊 Volatilité moyenne marché: {avg_volatility:.2f}% (sur {len(volatilities)} paires)")
+            
+            # Firebase logging pour volatilité marché
+            if self.firebase_logger and avg_volatility > 5.0:  # Logger seulement si volatilité significative
+                self.firebase_logger.log_message(
+                    level="INFO",
+                    message=f"📊 VOLATILITÉ MARCHÉ: {avg_volatility:.2f}% (sur {len(volatilities)} paires)",
+                    module="market_analysis",
+                    additional_data={
+                        'avg_volatility': avg_volatility,
+                        'pairs_count': len(volatilities),
+                        'volatilities': volatilities[:10]  # Top 10 pour éviter surcharge
+                    }
+                )
+                
+                # Log métrique volatilité
+                self.firebase_logger.log_metric("market_volatility", avg_volatility)
             
         except Exception as e:
             self.logger.error(f"❌ Erreur vérification volatilité marché: {e}")

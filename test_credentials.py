@@ -124,7 +124,7 @@ def test_credentials():
         
         # Authentification
         credentials = ServiceAccountCredentials.from_json_keyfile_name(
-            credentials_path, scope
+            credentials_path, scope # type: ignore
         )
         print(f"   ✅ Credentials chargés")
         

@@ -13,6 +13,8 @@ logs/*.log
 
 # Credentials
 credentials.json
+firebase_credentials.json
+.streamlit/secrets.toml
 *.json
 !requirements.json
 

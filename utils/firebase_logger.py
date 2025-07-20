@@ -121,19 +121,19 @@ class FirebaseLogger:
         """Initialise Firebase Admin SDK"""
         try:
             # Vérification si déjà initialisé
-            if firebase_admin._apps:
-                app = firebase_admin.get_app()
+            if firebase_admin._apps:  # type: ignore
+                app = firebase_admin.get_app() # type: ignore
             else:
                 # Initialisation avec le fichier de credentials
-                cred = credentials.Certificate(FIREBASE_CONFIG.CREDENTIALS_PATH)
-                app = firebase_admin.initialize_app(cred, {
+                cred = credentials.Certificate(FIREBASE_CONFIG.CREDENTIALS_PATH) # type: ignore
+                app = firebase_admin.initialize_app(cred, { # type: ignore
                     'databaseURL': FIREBASE_CONFIG.DATABASE_URL,
                     'projectId': FIREBASE_CONFIG.PROJECT_ID
                 })
             
             # Références aux bases de données
-            self.db_ref = db.reference()
-            self.firestore_db = firestore.client()
+            self.db_ref = db.reference() # type: ignore
+            self.firestore_db = firestore.client() # type: ignore
             
             self.firebase_initialized = True
             self.logger.info("🔥 Firebase initialisé avec succès")
@@ -149,7 +149,7 @@ class FirebaseLogger:
         """Test la connexion Firebase"""
         try:
             # Test Realtime Database
-            test_ref = self.db_ref.child('_connection_test')
+            test_ref = self.db_ref.child('_connection_test') # type: ignore
             test_ref.set({
                 'timestamp': datetime.now().isoformat(),
                 'session_id': self.session_id,
@@ -157,7 +157,7 @@ class FirebaseLogger:
             })
             
             # Test Firestore
-            doc_ref = self.firestore_db.collection('_connection_test').document('test')
+            doc_ref = self.firestore_db.collection('_connection_test').document('test') # type: ignore
             doc_ref.set({
                 'timestamp': datetime.now(),
                 'session_id': self.session_id,
@@ -236,10 +236,10 @@ class FirebaseLogger:
         
         try:
             # Upload vers Firestore (pour requêtes complexes)
-            collection_ref = self.firestore_db.collection(collection)
+            collection_ref = self.firestore_db.collection(collection) # type: ignore
             
-            batch = self.firestore_db.batch()
-            for data in batch_data:
+            batch = self.firestore_db.batch() # type: ignore
+            for data in batch_data: 
                 doc_ref = collection_ref.document()
                 batch.set(doc_ref, data)
             
@@ -248,7 +248,7 @@ class FirebaseLogger:
             # Upload vers Realtime Database (pour temps réel)
             if data_type == "metrics":
                 # Métriques temps réel dans Realtime DB
-                metrics_ref = self.db_ref.child(f'realtime_metrics/{self.session_id}')
+                metrics_ref = self.db_ref.child(f'realtime_metrics/{self.session_id}') # type: ignore
                 for data in batch_data:
                     metrics_ref.child(str(int(time.time()))).set(data)
             
@@ -262,11 +262,49 @@ class FirebaseLogger:
 
     # =================== MÉTHODES DE LOGGING ===================
 
+    def should_log_to_firebase(self, level: str, message: str, module: str) -> bool:
+        """Détermine si un log doit aller vers Firebase (filtrage intelligent)"""
+        
+        # Toujours logger les événements critiques
+        critical_keywords = [
+            "Trade", "Position", "Signal détecté", "Erreur", "HORS HORAIRES", 
+            "démarré", "Capital", "Stop Loss", "Take Profit", "fermé", "ouvert",
+            "Scan des paires", "Top", "sélectionnées", "insuffisant", "bloqué",
+            "P&L", "Trailing Stop", "Surexposition", "Timeout", "Momentum"
+        ]
+        
+        # Événements importants à logger
+        if any(keyword in message for keyword in critical_keywords):
+            return True
+        
+        # Tous les WARNING et ERROR
+        if level in ["ERROR", "WARNING"]:
+            return True
+            
+        # Logs de démarrage/arrêt
+        if module in ["main", "trading_hours", "firebase_logger"]:
+            return True
+        
+        # Filtrer le spam de debug
+        spam_keywords = [
+            "Batch uploadé", "debug", "Vérification simple", "Thread upload",
+            "Collection nettoyée", "Test connexion"
+        ]
+        if any(keyword in message for keyword in spam_keywords):
+            return False
+        
+        # Par défaut, logger les INFO importantes
+        return level in ["INFO", "WARNING", "ERROR"]
+
     def log_message(self, level: str, message: str, module: str = "bot", 
                    trade_id: Optional[str] = None, pair: Optional[str] = None, 
                    capital: Optional[float] = None, additional_data: Optional[Dict] = None):
-        """Log un message avec contexte"""
+        """Log un message avec contexte et filtrage intelligent"""
         if not FIREBASE_CONFIG.ENABLE_FIREBASE_LOGGING:
+            return
+
+        # Filtrage intelligent pour éviter le spam
+        if not self.should_log_to_firebase(level, message, module):
             return
 
         log_entry = LogEntry(
@@ -394,17 +432,17 @@ class FirebaseLogger:
             performances = [doc.to_dict() for doc in docs]
             latest = performances[0]
             
-            total_pnl = sum(p.get('daily_pnl', 0) for p in performances)
-            total_trades = sum(p.get('daily_trades', 0) for p in performances)
-            avg_capital = sum(p.get('total_capital', 0) for p in performances) / len(performances)
+            total_pnl = sum(p.get('daily_pnl', 0) for p in performances) # type: ignore
+            total_trades = sum(p.get('daily_trades', 0) for p in performances) # type: ignore
+            avg_capital = sum(p.get('total_capital', 0) for p in performances) / len(performances) # type: ignore
             
             return {
                 'period_days': days,
                 'total_pnl': total_pnl,
                 'total_trades': total_trades,
                 'average_capital': avg_capital,
-                'current_capital': latest.get('total_capital', 0),
-                'latest_win_rate': latest.get('win_rate', 0),
+                'current_capital': latest.get('total_capital', 0), # type: ignore
+                'latest_win_rate': latest.get('win_rate', 0), # type: ignore
                 'roi_percent': (total_pnl / avg_capital * 100) if avg_capital > 0 else 0
             }
             
@@ -500,7 +538,7 @@ class FirebaseLogger:
             
             docs = query.stream()
             
-            batch = self.firestore_db.batch()
+            batch = self.firestore_db.batch() # type: ignore
             count = 0
             
             for doc in docs:
@@ -509,7 +547,7 @@ class FirebaseLogger:
                 
                 if count >= 500:  # Limite de batch Firestore
                     batch.commit()
-                    batch = self.firestore_db.batch()
+                    batch = self.firestore_db.batch() # type: ignore
                     count = 0
             
             if count > 0:

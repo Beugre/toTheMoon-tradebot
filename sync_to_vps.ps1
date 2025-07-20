@@ -3,7 +3,7 @@
 
 param(
     [string]$VpsUser = "root",
-    [string]$VpsHost = "your-vps-ip"
+    [string]$VpsHost = "YOUR_VPS_IP_HERE"  # Remplacez par votre vraie IP
 )
 
 Write-Host "🔄 SYNCHRONISATION VERS VPS" -ForegroundColor Green

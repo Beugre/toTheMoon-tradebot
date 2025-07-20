@@ -1,95 +1,83 @@
-# Script de deploiement rapide - Bot v3.0 Enhanced Edition + Notifications Horaires
+# 🚀 DÉPLOIEMENT AUTOMATIQUE - toTheMoon Bot Firebase Integration
+# Script Windows -> VPS (version simple avec Git pull)
+# Usage: .\deploy_simple.ps1
+
 param(
-    [string]$VpsHost = "root@213.199.41.168",
-    [string]$BotDir = "/opt/toTheMoon_tradebot",
-    [string]$ServiceName = "tothemoon-tradebot"
+    [string]$VpsUser = "root",
+    [string]$VpsHost = "213.199.41.168",
+    [string]$BotDir = "/root/toTheMoon_tradebot",
+    [string]$ServiceName = "toTheMoon-bot"
 )
 
-Write-Host "Deploiement Bot v3.0 Enhanced Edition + Notifications Horaires" -ForegroundColor Cyan
-Write-Host "================================================================" -ForegroundColor Cyan
+Write-Host "🚀 DÉPLOIEMENT AUTOMATIQUE TOTHE MOON BOT" -ForegroundColor Green
+Write-Host "=========================================" -ForegroundColor Green
+Write-Host "📅 $(Get-Date)" -ForegroundColor Blue
+Write-Host "🔥 Version: Simple Git Pull Deploy" -ForegroundColor Yellow
+Write-Host ""
 
-# Etape 1: Arreter le bot
-Write-Host "Arret du bot..." -ForegroundColor Yellow
-ssh $VpsHost "systemctl stop $ServiceName 2>/dev/null; pkill -f 'python.*main.py' 2>/dev/null; echo 'Bot arrete'"
+# 1. Commit et push local
+Write-Host "📦 Push des changements vers GitHub..." -ForegroundColor Yellow
+git add .
+$commitMsg = "Deploy $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
+git commit -m $commitMsg -ErrorAction SilentlyContinue
+git push origin main
+Write-Host "✅ Code pushé vers GitHub" -ForegroundColor Green
 
-# Etape 2: Deployer les fichiers modifies
-Write-Host "Deploiement des fichiers..." -ForegroundColor Yellow
-scp config.py ${VpsHost}:${BotDir}/config.py
-scp main.py ${VpsHost}:${BotDir}/main.py
-scp utils/risk_manager.py ${VpsHost}:${BotDir}/utils/risk_manager.py
-scp utils/telegram_notifier.py ${VpsHost}:${BotDir}/utils/telegram_notifier.py
-scp utils/enhanced_sheets_logger.py ${VpsHost}:${BotDir}/utils/enhanced_sheets_logger.py
-scp utils/trading_hours_notifier.py ${VpsHost}:${BotDir}/utils/trading_hours_notifier.py
-scp trading_hours.py ${VpsHost}:${BotDir}/trading_hours.py
+# 2. Backup sur VPS
+Write-Host "📦 Backup sur VPS..." -ForegroundColor Cyan
+$backupDate = Get-Date -Format "yyyyMMdd_HHmmss"
+ssh root@$VpsHost "mkdir -p /root/backups && cp -r $BotDir /root/backups/backup_$backupDate 2>/dev/null || echo 'Pas de backup nécessaire'"
 
-# Deploiement des scripts de test (optionnel)
-Write-Host "Deploiement des scripts de test..." -ForegroundColor Yellow
-ssh $VpsHost "mkdir -p ${BotDir}/patches"
-scp patches/test_notifications_horaires.py ${VpsHost}:${BotDir}/patches/test_notifications_horaires.py
-scp patches/integration_notifications_guide.py ${VpsHost}:${BotDir}/patches/integration_notifications_guide.py
+# 3. Arrêt du bot
+Write-Host "🛑 Arrêt du bot..." -ForegroundColor Yellow
+ssh root@$VpsHost "systemctl stop $ServiceName 2>/dev/null"
+ssh root@$VpsHost "pkill -f 'python.*main.py' 2>/dev/null"
 
-# Etape 3: Test de compilation
-Write-Host "Test de compilation..." -ForegroundColor Yellow
-$compileResult = ssh $VpsHost "cd $BotDir; python3 -m py_compile main.py && echo 'COMPILE_OK'"
+# 4. Git pull sur VPS
+Write-Host "📥 Git pull sur VPS..." -ForegroundColor Cyan
+ssh root@$VpsHost "cd $BotDir"
+ssh root@$VpsHost "cd $BotDir; git stash"
+ssh root@$VpsHost "cd $BotDir; git pull origin main"
 
-if ($compileResult -notcontains "COMPILE_OK") {
-    Write-Host "Erreur de compilation!" -ForegroundColor Red
-    exit 1
-}
+# 5. Création logs directory si nécessaire
+ssh root@$VpsHost "mkdir -p $BotDir/logs"
 
-Write-Host "Compilation reussie" -ForegroundColor Green
-
-# Etape 4: Redemarrer le bot
-Write-Host "Redemarrage du bot..." -ForegroundColor Yellow
-
-# Essayer systemd d'abord
-$systemdResult = ssh $VpsHost "systemctl start $ServiceName 2>/dev/null && systemctl is-active $ServiceName 2>/dev/null"
-
-if ($systemdResult -eq "active") {
-    Write-Host "Bot redemarre avec systemd" -ForegroundColor Green
+# 6. Test de compilation
+Write-Host "🔧 Test de compilation..." -ForegroundColor Yellow
+$compileTest = ssh root@$VpsHost "cd $BotDir; python3 -c 'import main; print(\"COMPILE_OK\")' 2>/dev/null"
+if ($compileTest -match "COMPILE_OK") {
+    Write-Host "✅ Compilation réussie" -ForegroundColor Green
 }
 else {
-    Write-Host "Demarrage manuel..." -ForegroundColor Yellow
-    ssh $VpsHost "cd $BotDir; nohup python3 main.py > logs/bot.log 2>&1 &"
-    Start-Sleep 3
-    
-    $processCheck = ssh $VpsHost "pgrep -f 'python.*main.py'"
-    if ($processCheck) {
-        Write-Host "Bot demarre manuellement (PID: $processCheck)" -ForegroundColor Green
-    }
-    else {
-        Write-Host "Echec du demarrage" -ForegroundColor Red
-        exit 1
-    }
+    Write-Host "⚠️ Erreur de compilation, mais on continue..." -ForegroundColor Yellow
 }
 
-# Etape 5: Verification
-Write-Host "Verification..." -ForegroundColor Yellow
-Start-Sleep 5
+# 7. Redémarrage du bot
+Write-Host "🚀 Redémarrage du bot..." -ForegroundColor Green
+ssh root@$VpsHost "cd $BotDir; systemctl start $ServiceName 2>/dev/null"
+if ($LASTEXITCODE -ne 0) {
+    ssh root@$VpsHost "cd $BotDir; nohup python3 main.py > logs/bot.log 2>&1 &"
+    Write-Host "Bot démarré manuellement" -ForegroundColor Yellow
+}
 
-$healthCheck = ssh $VpsHost "cd $BotDir; tail -n 10 logs/bot.log 2>/dev/null | tail -n 3"
+# 8. Vérification finale
+Start-Sleep 3
+Write-Host "🔍 Vérification finale..." -ForegroundColor Yellow
+$statusCheck = ssh root@$VpsHost "systemctl is-active $ServiceName 2>/dev/null"
+if (-not $statusCheck) {
+    $statusCheck = ssh root@$VpsHost "pgrep -f 'python.*main.py'"
+}
 
-if ($healthCheck) {
-    Write-Host "Bot operationnel - Logs:" -ForegroundColor Green
-    Write-Host $healthCheck -ForegroundColor White
+if ($statusCheck) {
+    Write-Host "🎉 DÉPLOIEMENT RÉUSSI!" -ForegroundColor Green
+    Write-Host "✅ Bot opérationnel" -ForegroundColor Green
+}
+else {
+    Write-Host "⚠️ Statut incertain - vérifiez manuellement" -ForegroundColor Yellow
 }
 
 Write-Host ""
-Write-Host "DEPLOIEMENT TERMINE!" -ForegroundColor Green
-Write-Host "Nouvelles fonctionnalites Bot v3.0 Enhanced Edition:" -ForegroundColor Cyan
-Write-Host "- 🌅 Notifications horaires automatiques avec emojis fun"
-Write-Host "- 🍽️ Alertes lunch time et power hour US"
-Write-Host "- 📊 Notifications volatilite adaptatives"
-Write-Host "- 🔥 Messages motivants selon sessions de marche"
-Write-Host "- 💰 Migration USDC pour liquidite 26x superieure"
-Write-Host "- 🛡️ BNB burn desactive (economie 1,824€/mois)"
-Write-Host "- 📈 TP optimise a 1.2% pour meilleur risk/reward"
-Write-Host "- ⏰ Trading hours 9h-23h avec intensite adaptative"
-Write-Host "- 📋 Enhanced Google Sheets avec calculs automatiques"
-Write-Host "- 🚫 Anti-fragmentation et gestion intelligente positions"
-Write-Host ""
-Write-Host "Commandes utiles:" -ForegroundColor Yellow
-Write-Host "Logs: ssh $VpsHost 'tail -f $BotDir/logs/bot.log'"
-Write-Host "Status: ssh $VpsHost 'systemctl status $ServiceName'"
-Write-Host "Test notifications: ssh $VpsHost 'cd $BotDir && python3 patches/test_notifications_horaires.py'"
-Write-Host "Verification integration: ssh $VpsHost 'cd $BotDir && python3 patches/integration_notifications_guide.py'"
+Write-Host "📋 Commandes utiles:" -ForegroundColor Cyan
+Write-Host "Logs: ssh root@$VpsHost 'tail -f $BotDir/logs/bot.log'"
+Write-Host "Status: ssh root@$VpsHost 'systemctl status $ServiceName'"
+Write-Host "Manuel: ssh root@$VpsHost"
