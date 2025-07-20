@@ -34,6 +34,7 @@ from trading_hours import (get_current_trading_session, get_hours_status_message
                            get_trading_intensity, is_trading_hours_active)
 from utils.database import TradingDatabase
 from utils.enhanced_sheets_logger import EnhancedSheetsLogger
+from utils.firebase_logger import firebase_logger
 from utils.logger import setup_logger
 from utils.risk_manager import RiskManager
 from utils.technical_indicators import TechnicalAnalyzer
@@ -120,6 +121,13 @@ class ScalpingBot:
             self.sheets_logger = None
             logging.info("📊 Google Sheets désactivé")
         
+        # Firebase Logger
+        self.firebase_logger = firebase_logger
+        if firebase_logger.firebase_initialized:
+            logging.info("🔥 Firebase Logger activé pour analytics temps réel")
+        else:
+            logging.info("🔥 Firebase Logger désactivé")
+        
         # Bot state
         self.is_running = False
         self.daily_pnl = 0.0
@@ -156,6 +164,20 @@ class ScalpingBot:
         
         # Notification de démarrage
         await self.telegram_notifier.send_start_notification(self.start_capital)
+        
+        # 🔥 LOG FIREBASE: Démarrage du bot
+        self.firebase_logger.log_message(
+            level="INFO",
+            message=f"Bot démarré avec capital: {self.start_capital:.2f} USDC",
+            module="main",
+            capital=self.start_capital,
+            additional_data={
+                'session_start': True,
+                'config_version': 'v3.0_enhanced',
+                'max_positions': self.config.MAX_OPEN_POSITIONS,
+                'base_position_size': self.config.BASE_POSITION_SIZE_PERCENT
+            }
+        )
         
         self.is_running = True
         self.logger.info("🟢 [RUNNING] Bot lancé avec succès")
@@ -286,6 +308,20 @@ class ScalpingBot:
                 self.metrics_counter += 1
                 if self.metrics_counter % 10 == 0:
                     await self.save_realtime_metrics()
+                    
+                    # Log Firebase pour métriques temps réel
+                    if self.firebase_logger:
+                        try:
+                            total_capital = self.get_total_capital()
+                            
+                            # Log métriques importantes avec log_metric
+                            self.firebase_logger.log_metric("total_capital", total_capital)
+                            self.firebase_logger.log_metric("daily_pnl", self.daily_pnl)
+                            self.firebase_logger.log_metric("open_positions", len(self.open_positions))
+                            self.firebase_logger.log_metric("daily_trades", self.daily_trades)
+                            
+                        except Exception as e:
+                            self.logger.error(f"❌ Erreur Firebase metrics: {e}")
                 
                 # Vérification de cohérence des positions (toutes les 50 itérations)
                 if self.metrics_counter % 50 == 0:
@@ -304,6 +340,19 @@ class ScalpingBot:
                 
             except Exception as e:
                 self.logger.error(f"❌ Erreur dans la boucle principale: {e}")
+                
+                # Log Firebase pour erreurs critiques
+                if self.firebase_logger:
+                    try:
+                        self.firebase_logger.log_message(
+                            level="ERROR",
+                            message=f"Erreur boucle principale: {str(e)}",
+                            module="main_loop",
+                            additional_data={'error_type': type(e).__name__}
+                        )
+                    except Exception:
+                        pass  # Éviter les boucles d'erreur
+                
                 await asyncio.sleep(5)
 
     async def scan_usdc_pairs(self) -> List[PairScore]:
@@ -568,6 +617,43 @@ class ScalpingBot:
                 
                 self.logger.info(f"📊 Google Sheets - Capital avant: {capital_before_trade:.2f} USDC, après: {capital_after_trade:.2f} USDC (différence: {capital_after_trade - capital_before_trade:+.2f} USDC)")
                 await self.sheets_logger.log_trade(trade, "OPEN", capital_before_trade, capital_after_trade)
+            else:
+                capital_after_trade = self.get_total_capital()
+            
+            # 🔥 LOG FIREBASE: Trade ouvert
+            self.firebase_logger.log_trade({
+                'trade_id': trade_id,
+                'timestamp': trade.timestamp.isoformat(),
+                'pair': symbol,
+                'direction': direction.value,
+                'action': 'OPEN',
+                'entry_price': current_price,
+                'size': quantity,
+                'stop_loss': stop_loss,
+                'take_profit': take_profit,
+                'capital_before': capital_before_trade,
+                'capital_after': capital_after_trade,
+                'session_trading': get_current_trading_session(),
+                'volatility': volatility,
+                'volume_24h': f"{final_notional:.0f}",
+                'signals': {
+                    'direction': direction.value,
+                    'position_size': position_size,
+                    'anti_fragmentation': True
+                }
+            })
+            
+            # 🔥 LOG FIREBASE: Métrique capital
+            self.firebase_logger.log_metric(
+                metric_type="capital_change",
+                value=capital_after_trade - capital_before_trade,
+                pair=symbol,
+                additional_info={
+                    'action': 'trade_open',
+                    'capital_total': capital_after_trade,
+                    'position_size': position_size
+                }
+            )
             
             # Enregistrement en base de données
             try:
@@ -1073,6 +1159,27 @@ class ScalpingBot:
                 except Exception as e:
                     self.logger.error(f"❌ Erreur mise à jour DB: {e}")
             
+            # Log Firebase pour fermeture de trade
+            if self.firebase_logger:
+                try:
+                    trade_data = {
+                        'trade_id': trade_id,
+                        'pair': trade.pair,
+                        'direction': trade.direction.value,
+                        'size': trade.size,
+                        'entry_price': trade.entry_price,
+                        'exit_price': exit_price,
+                        'pnl_amount': pnl_amount,
+                        'pnl_percent': pnl_percent,
+                        'duration_seconds': trade.duration.total_seconds() if trade.duration else 0,
+                        'exit_reason': reason,
+                        'daily_pnl': self.daily_pnl,
+                        'total_capital': total_capital
+                    }
+                    self.firebase_logger.log_trade(trade_data)
+                except Exception as e:
+                    self.logger.error(f"❌ Erreur log Firebase fermeture: {e}")
+            
         except Exception as e:
             self.logger.error(f"❌ Erreur fermeture position {trade_id}: {e}")
     
@@ -1231,6 +1338,26 @@ class ScalpingBot:
             
             await self.database.insert_daily_performance(perf_data)
             self.logger.info(f"📊 Performances journalières enregistrées en base")
+            
+            # Log Firebase pour les performances quotidiennes
+            if self.firebase_logger:
+                try:
+                    firebase_perf_data = {
+                        'date': today,
+                        'total_capital': total_capital,
+                        'daily_pnl': self.daily_pnl,
+                        'daily_pnl_percent': daily_pnl_percent,
+                        'total_trades': total_trades,
+                        'winning_trades': winning_trades,
+                        'losing_trades': losing_trades,
+                        'win_rate': win_rate,
+                        'max_drawdown': min(0, daily_pnl_percent),
+                        'status': 'COMPLETED'
+                    }
+                    self.firebase_logger.log_performance(firebase_perf_data)
+                    self.logger.info(f"🔥 Performances journalières enregistrées dans Firebase")
+                except Exception as e:
+                    self.logger.error(f"❌ Erreur log Firebase performances: {e}")
             
         except Exception as e:
             self.logger.error(f"❌ Erreur enregistrement performances journalières: {e}")

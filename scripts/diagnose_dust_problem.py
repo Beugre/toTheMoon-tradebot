@@ -3,13 +3,17 @@
 Diagnostic et nettoyage automatique des miettes (dust) qui bloquent les trades
 """
 
-import sys
 import os
+import sys
+
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from binance.client import Client
-from config import API_CONFIG, TradingConfig
 import asyncio
+
+from binance.client import Client
+
+from config import API_CONFIG, TradingConfig
+
 
 async def diagnose_dust_problem():
     """Diagnostique le problème des miettes qui bloquent les trades"""

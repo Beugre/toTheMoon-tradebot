@@ -3,13 +3,16 @@
 Test de la logique corrigée pour ignorer les miettes dans l'exposition
 """
 
-import sys
 import os
+import sys
+
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from unittest.mock import Mock, patch
-from main import ScalpingBot
+
 from config import TradingConfig
+from main import ScalpingBot
+
 
 def test_dust_exposure_logic():
     """Test que les miettes n'affectent plus l'exposition"""
@@ -40,10 +43,10 @@ def test_dust_exposure_logic():
                 'BTCUSDC': {'price': '75000.00'},
                 'SOLUSDC': {'price': '182.35'},
             }
-            return prices.get(symbol, {'price': '1.0'})
+            return prices.get(symbol, {'price': '1.0'})  # type: ignore
         
         bot.get_asset_balance = mock_get_asset_balance
-        bot.binance_client.get_symbol_ticker = mock_get_symbol_ticker
+        bot.binance_client.get_symbol_ticker = mock_get_symbol_ticker  # type: ignore 
         bot.open_positions = {}  # Pas de positions ouvertes
         
         # Test exposition ETH (miette)
