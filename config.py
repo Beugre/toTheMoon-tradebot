@@ -98,6 +98,7 @@ class TradingConfig:
     
     # Paramètres de gestion des positions et soldes
     PHANTOM_POSITION_THRESHOLD: float = 0.00001  # Seuil position fantôme
+    DUST_BALANCE_THRESHOLD_USDC: float = 5.0  # Ignorer les soldes < 5$ USDC pour exposition
     BALANCE_SAFETY_MARGIN: float = 0.999  # Marge de sécurité pour soldes (99.9%)
     BALANCE_TOLERANCE: float = 0.001  # Tolérance erreurs d'arrondi
     

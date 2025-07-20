@@ -291,6 +291,10 @@ class ScalpingBot:
                 if self.metrics_counter % 50 == 0:
                     await self.check_positions_consistency()
                 
+                # 🧹 Nettoyage automatique des miettes (toutes les 100 itérations)
+                if self.metrics_counter % 100 == 0:
+                    await self.convert_dust_to_bnb_if_needed()
+                
                 # Vérification de la volatilité du marché (toutes les 30 itérations)
                 if self.metrics_counter % 30 == 0:
                     await self.check_market_volatility(top_pairs)
@@ -648,14 +652,20 @@ class ScalpingBot:
         # 2. Exposition des soldes crypto existants (CRITIQUE!)
         try:
             existing_balance = self.get_asset_balance(base_asset)
-            if existing_balance > 0.00001:  # Seuil pour éviter les poussières
+            if existing_balance > 0.00001:  # Seuil technique pour éviter erreurs
                 symbol = base_asset + 'USDC'
                 ticker = self.binance_client.get_symbol_ticker(symbol=symbol)
                 current_price = float(ticker['price'])
                 existing_value = existing_balance * current_price
-                total_exposure += existing_value
                 
-                self.logger.debug(f"💎 Exposition {base_asset}: Positions ouvertes: {total_exposure - existing_value:.2f} USDC + Solde existant: {existing_value:.2f} USDC = Total: {total_exposure:.2f} USDC")
+                # 🧹 GESTION INTELLIGENTE DES MIETTES
+                if existing_value < self.config.DUST_BALANCE_THRESHOLD_USDC:
+                    self.logger.info(f"🧹 Miettes détectées {base_asset}: {existing_balance:.8f} ({existing_value:.2f}$ < {self.config.DUST_BALANCE_THRESHOLD_USDC}$) - Ignorées pour exposition")
+                    # Les miettes ne comptent pas dans l'exposition pour bloquer les trades
+                else:
+                    total_exposure += existing_value
+                    self.logger.debug(f"💎 Exposition {base_asset}: Positions ouvertes: {total_exposure - existing_value:.2f} USDC + Solde existant: {existing_value:.2f} USDC = Total: {total_exposure:.2f} USDC")
+                
         except Exception as e:
             self.logger.error(f"❌ Erreur calcul exposition solde existant {base_asset}: {e}")
         
@@ -1251,6 +1261,73 @@ class ScalpingBot:
         except Exception as e:
             self.logger.error(f"❌ Erreur enregistrement métriques temps réel: {e}")
     
+    async def convert_dust_to_bnb_if_needed(self):
+        """Convertit automatiquement les miettes de crypto en BNB si nécessaire"""
+        try:
+            account_info = self.binance_client.get_account()
+            dust_assets = []
+            
+            for balance in account_info['balances']:
+                asset = balance['asset']
+                free_balance = float(balance['free'])
+                
+                # Skip USDC, BNB et les soldes nuls
+                if asset in ['USDC', 'BNB'] or free_balance <= 0.00001:
+                    continue
+                
+                try:
+                    # Calcul de la valeur en USDC
+                    symbol = asset + 'USDC'
+                    ticker = self.binance_client.get_symbol_ticker(symbol=symbol)
+                    price_usdc = float(ticker['price'])
+                    value_usdc = free_balance * price_usdc
+                    
+                    # Si c'est une miette
+                    if value_usdc < self.config.DUST_BALANCE_THRESHOLD_USDC:
+                        dust_assets.append({
+                            'asset': asset,
+                            'balance': free_balance,
+                            'value_usdc': value_usdc
+                        })
+                        
+                except Exception:
+                    # Pas de paire USDC pour cet asset, on ignore
+                    continue
+            
+            if dust_assets:
+                total_dust_value = sum(d['value_usdc'] for d in dust_assets)
+                self.logger.info(f"🧹 {len(dust_assets)} miettes détectées (total: {total_dust_value:.2f}$ USDC)")
+                
+                # Conversion via l'API Binance Dust Transfer
+                try:
+                    assets_to_convert = [d['asset'] for d in dust_assets]
+                    result = self.binance_client.transfer_dust(**{'asset': assets_to_convert})
+                    
+                    if result.get('transferResult'):
+                        total_bnb = sum(float(r.get('transferedAmount', 0)) for r in result['transferResult'])
+                        self.logger.info(f"✅ Miettes converties en {total_bnb:.8f} BNB")
+                        
+                        # Notification Telegram
+                        await self.telegram_notifier.send_message(
+                            f"🧹 **Nettoyage automatique des miettes**\\n\\n"
+                            f"💰 {len(dust_assets)} assets convertis\\n"
+                            f"📊 Valeur totale: {total_dust_value:.2f}$ USDC\\n"
+                            f"🪙 BNB reçu: {total_bnb:.8f} BNB\\n\\n"
+                            f"Assets convertis: {', '.join(assets_to_convert)}"
+                        )
+                        
+                    else:
+                        self.logger.warning(f"⚠️ Échec conversion miettes: {result}")
+                        
+                except Exception as e:
+                    self.logger.warning(f"⚠️ Erreur conversion miettes: {e}")
+                    # Alternative: Log pour conversion manuelle
+                    dust_list = ', '.join([f"{d['asset']} ({d['value_usdc']:.2f}$)" for d in dust_assets])
+                    self.logger.info(f"💡 Miettes à convertir manuellement: {dust_list}")
+                    
+        except Exception as e:
+            self.logger.error(f"❌ Erreur check miettes: {e}")
+
     async def check_positions_consistency(self):
         """Vérifie la cohérence entre les positions en mémoire et les soldes Binance + gère la surexposition"""
         try:
