@@ -14,8 +14,26 @@ import firebase_admin
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+import pytz  # Pour le fuseau horaire Paris
 import streamlit as st
 from firebase_admin import credentials, firestore
+
+# Configuration timezone Paris
+PARIS_TZ = pytz.timezone('Europe/Paris')
+
+def to_paris_time(dt):
+    """Convertit datetime en timezone Paris"""
+    if dt is None:
+        return None
+    if isinstance(dt, str):
+        dt = pd.to_datetime(dt)
+    if dt.tzinfo is None:
+        dt = pytz.UTC.localize(dt)
+    return dt.astimezone(PARIS_TZ)
+
+def now_paris():
+    """Retourne l'heure actuelle Paris"""
+    return datetime.now(PARIS_TZ)
 
 # Configuration de la page
 st.set_page_config(
@@ -141,7 +159,7 @@ def show_overview(db):
     st.header("🎯 Vue d'Ensemble")
     
     # Indicateur de refresh temps réel
-    st.caption(f"🔄 Données mises à jour: {datetime.now().strftime('%H:%M:%S')}")
+    st.caption(f"🔄 Données mises à jour: {now_paris().strftime('%H:%M:%S')}")
     
     # Récupération des données récentes pour affichage
     recent_trades = get_real_time_data(db, "trades", 10)
@@ -208,7 +226,7 @@ def show_performance(db):
     st.header("📈 Performance Trading - Analyse Réelle")
     
     # Indicateur de refresh temps réel
-    st.caption(f"🔄 Données mises à jour: {datetime.now().strftime('%H:%M:%S')}")
+    st.caption(f"🔄 Données mises à jour: {now_paris().strftime('%H:%M:%S')}")
     
     # Récupération de TOUS les trades (augmenter limite pour avoir toutes les données)
     trades = get_real_time_data(db, "trades", 1000)
@@ -387,7 +405,7 @@ def show_trades(db):
     st.header("💹 Trades Détaillés")
     
     # Indicateur de refresh temps réel
-    st.caption(f"🔄 Données mises à jour: {datetime.now().strftime('%H:%M:%S')}")
+    st.caption(f"🔄 Données mises à jour: {now_paris().strftime('%H:%M:%S')}")
     
     # Récupérer plus de trades pour avoir toutes les données
     trades = get_real_time_data(db, "trades", 1000)
@@ -440,7 +458,7 @@ def show_logs(db):
     st.header("🔔 Logs Temps Réel")
     
     # Indicateur de refresh temps réel
-    st.caption(f"🔄 Données mises à jour: {datetime.now().strftime('%H:%M:%S')}")
+    st.caption(f"🔄 Données mises à jour: {now_paris().strftime('%H:%M:%S')}")
     
     logs = get_real_time_data(db, "bot_logs", 100)
     
@@ -485,7 +503,7 @@ def show_config():
     st.header("⚙️ Configuration du Bot")
     
     # Indicateur de refresh temps réel
-    st.caption(f"🔄 Configuration chargée: {datetime.now().strftime('%H:%M:%S')}")
+    st.caption(f"🔄 Configuration chargée: {now_paris().strftime('%H:%M:%S')}")
     
     if TradingConfig is None:
         st.error("❌ Configuration TradingConfig non disponible - Vérifiez config.py")
@@ -640,7 +658,7 @@ def main():
     st.sidebar.markdown("---")
     st.sidebar.markdown("### 📊 Status")
     st.sidebar.success("🔥 Firebase: Connecté")
-    st.sidebar.info(f"🕐 Dernière MAJ: {datetime.now().strftime('%H:%M:%S')}")
+    st.sidebar.info(f"🕐 Dernière MAJ: {now_paris().strftime('%H:%M:%S')}")
     
     # 🔄 AUTO-REFRESH GLOBAL (corrigé)
     auto_refresh = st.sidebar.checkbox("🔄 Auto-refresh (10s)", value=True, key="global_refresh")
@@ -651,19 +669,16 @@ def main():
     
     # Initialiser session state pour auto-refresh
     if 'last_refresh' not in st.session_state:
-        st.session_state.last_refresh = datetime.now()
+        st.session_state.last_refresh = now_paris()
     
     # Auto-refresh logic fiable
     if auto_refresh:
-        now = datetime.now()
+        now = now_paris()
         time_since_refresh = (now - st.session_state.last_refresh).total_seconds()
         
         if time_since_refresh >= 10:  # 10 secondes écoulées
             st.session_state.last_refresh = now
-            # Utilisation d'un placeholder qui force le rerun
-            placeholder = st.empty()
-            with placeholder:
-                st.rerun()
+            st.rerun()
     
     # Navigation vers les pages (toujours afficher le contenu)
     if page == "🎯 Vue d'ensemble":
