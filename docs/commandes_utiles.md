@@ -74,7 +74,7 @@ ssh root@213.199.41.168 "systemctl start tothemoon-tradebot"
 ssh root@213.199.41.168 "systemctl stop tothemoon-tradebot"
 ```
 
-### Redémarrage du service
+Redémarrage du service
 
 ```bash
 ssh root@213.199.41.168 "systemctl restart tothemoon-tradebot"

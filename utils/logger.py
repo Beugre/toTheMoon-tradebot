@@ -65,7 +65,7 @@ def setup_colored_logger(name: str) -> logging.Logger:
     console_handler.setFormatter(colored_formatter)
     
     # Handler fichier
-    file_handler = logging.handlers.RotatingFileHandler(
+    file_handler = logging.handlers.RotatingFileHandler( # type: ignore
         filename="logs/trading_bot.log",
         maxBytes=10485760,  # 10MB
         backupCount=5,

@@ -94,7 +94,7 @@ def analyze_fees():
         print("   Top 5 pires fragmentations:")
         
         worst_frag = fragmented.sort_values(('Total', 'count'), ascending=False).head(5)
-        for (minute, pair, trade_type), data in worst_frag.iterrows():
+        for (minute, pair, trade_type), data in worst_frag.iterrows(): # type: ignore
             trades_count = data[('Total', 'count')]
             total_value = data[('Total', 'sum')]
             total_fees = data[('Fee', 'sum')]
