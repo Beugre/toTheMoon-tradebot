@@ -40,9 +40,8 @@ def init_firebase():
     
     return firestore.client()
 
-@st.cache_data(ttl=30)
 def get_real_time_data(db, collection_name: str, limit: int = 100) -> List[Dict]:
-    """Récupère les données en temps réel depuis Firebase avec cache de 30s"""
+    """Récupère les données en temps réel depuis Firebase"""
     try:
         if db is None:
             return []
@@ -396,7 +395,6 @@ def main():
     
     # Bouton de rafraîchissement
     if st.sidebar.button("🔄 Actualiser"):
-        st.cache_data.clear()
         st.rerun()
     
     # Navigation vers les pages
