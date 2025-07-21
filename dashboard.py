@@ -73,29 +73,32 @@ except Exception as e:
     st.info("📝 Utilisation des valeurs par défaut")
 
 def init_firebase():
-    """Initialise la connexion Firebase"""
+    """Initialise la connexion Firebase - CORRIGÉ pour éviter double initialisation"""
     try:
-        # Vérifier si l'app existe déjà
-        firebase_admin.get_app()
+        # Essayer de récupérer une app Firebase existante
+        app = firebase_admin.get_app()
+        return firestore.client(app)
     except ValueError:
-        # Initialiser Firebase avec les credentials
+        # Aucune app existe, donc on peut l'initialiser
         try:
             # Essayer d'abord les secrets Streamlit Cloud
             if hasattr(st, 'secrets') and 'firebase' in st.secrets:
                 # Utiliser les secrets Streamlit Cloud
                 firebase_credentials = dict(st.secrets['firebase'])
                 cred = credentials.Certificate(firebase_credentials)
-                firebase_admin.initialize_app(cred)
+                app = firebase_admin.initialize_app(cred)
+                st.success("🔥 Firebase initialisé avec les secrets Streamlit Cloud")
+                return firestore.client(app)
             else:
                 # Fallback sur le fichier local
                 cred = credentials.Certificate('firebase_credentials.json')
-                firebase_admin.initialize_app(cred)
+                app = firebase_admin.initialize_app(cred)
+                st.success("🔥 Firebase initialisé avec le fichier local")
+                return firestore.client(app)
         except Exception as e:
             st.error(f"Erreur d'initialisation Firebase: {str(e)}")
             st.info("💡 Vérifiez que les secrets Firebase sont configurés dans Streamlit Cloud")
             return None
-    
-    return firestore.client()
 
 def get_real_time_data(db, collection_name: str, limit: int = 100) -> List[Dict]:
     """Récupère les données en temps réel depuis Firebase"""
