@@ -674,7 +674,15 @@ def main():
     # Auto-refresh logic fiable
     if auto_refresh:
         now = now_paris()
-        time_since_refresh = (now - st.session_state.last_refresh).total_seconds()
+        
+        # S'assurer que les deux datetime ont le même timezone
+        if st.session_state.last_refresh.tzinfo is None:
+            # Convertir en timezone Paris si pas de timezone
+            last_refresh = PARIS_TZ.localize(st.session_state.last_refresh)
+        else:
+            last_refresh = st.session_state.last_refresh
+        
+        time_since_refresh = (now - last_refresh).total_seconds()
         
         if time_since_refresh >= 10:  # 10 secondes écoulées
             st.session_state.last_refresh = now
