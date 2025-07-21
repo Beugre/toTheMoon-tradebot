@@ -162,6 +162,9 @@ class ScalpingBot:
         # Initialisation de la base de données
         await self.database.initialize_database()
         
+        # 🔥 Chargement des positions sauvegardées depuis Firebase
+        await self.load_open_positions_from_db()
+        
         # Nettoyage des positions fantômes
         await self.cleanup_phantom_positions()
         
@@ -232,6 +235,134 @@ class ScalpingBot:
                     self.logger.error(f"❌ Erreur nettoyage position fantôme {trade_id}: {e}")
                     
         return len(phantom_positions)
+
+    async def save_open_positions_to_db(self):
+        """Sauvegarde les positions ouvertes en Firebase pour persistance"""
+        try:
+            if not self.open_positions:
+                return
+            
+            if not self.firebase_logger or not self.firebase_logger.firebase_initialized or not self.firebase_logger.firestore_db:
+                self.logger.warning("🔥 Firebase Firestore non disponible pour sauvegarde positions")
+                return
+            
+            for trade_id, trade in self.open_positions.items():
+                try:
+                    position_data = {
+                        'trade_id': trade_id,
+                        'pair': trade.pair,
+                        'entry_price': trade.entry_price,
+                        'stop_loss': trade.stop_loss,
+                        'take_profit': trade.take_profit,
+                        'size': trade.size,
+                        'timestamp': trade.timestamp.isoformat(),
+                        'trailing_stop': getattr(trade, 'trailing_stop', 0),
+                        'direction': trade.direction.value if hasattr(trade.direction, 'value') else str(trade.direction),
+                        'saved_at': datetime.now().isoformat(),
+                        'session_id': self.firebase_logger.session_id
+                    }
+                    
+                    # Sauvegarde en Firebase Firestore
+                    self.firebase_logger.firestore_db.collection('position_states').document(trade_id).set(position_data)
+                    
+                except Exception as e:
+                    self.logger.error(f"❌ Erreur sauvegarde position Firebase {trade_id}: {e}")
+                    
+            self.logger.debug(f"� {len(self.open_positions)} positions sauvegardées en Firebase")
+            
+        except Exception as e:
+            self.logger.error(f"❌ Erreur sauvegarde positions Firebase: {e}")
+
+    async def load_open_positions_from_db(self):
+        """Charge les positions ouvertes depuis Firebase au démarrage"""
+        try:
+            if not self.firebase_logger or not self.firebase_logger.firebase_initialized or not self.firebase_logger.firestore_db:
+                self.logger.warning("🔥 Firebase Firestore non disponible pour chargement positions")
+                return
+            
+            # Récupération des positions depuis Firestore
+            positions_ref = self.firebase_logger.firestore_db.collection('position_states')
+            saved_positions_docs = positions_ref.get()
+            
+            if not saved_positions_docs:
+                self.logger.info("📂 Aucune position sauvegardée trouvée en Firebase")
+                return
+            
+            saved_positions = []
+            for doc in saved_positions_docs:
+                saved_positions.append(doc.to_dict())
+            
+            if not saved_positions:
+                self.logger.info("📂 Aucune position sauvegardée trouvée en Firebase")
+                return
+            
+            positions_restored = 0
+            
+            for position_data in saved_positions:
+                try:
+                    trade_id = position_data['trade_id']
+                    pair = position_data['pair']
+                    
+                    # Vérifier que le solde existe toujours sur Binance
+                    base_asset = pair.replace('USDC', '')
+                    available_balance = self.get_asset_balance(base_asset)
+                    
+                    # Seulement restaurer si on a encore le solde
+                    if available_balance >= float(position_data['size']) * 0.95:  # Tolérance 5%
+                        
+                        # Recréer l'objet Trade (classes déjà définies dans ce fichier)
+                        trade = Trade(
+                            id=position_data['trade_id'],
+                            pair=pair,
+                            direction=TradeDirection(position_data['direction']),
+                            size=float(position_data['size']),
+                            entry_price=float(position_data['entry_price']),
+                            stop_loss=float(position_data['stop_loss']),
+                            take_profit=float(position_data['take_profit']),
+                            trailing_stop=float(position_data.get('trailing_stop', 0)),
+                            timestamp=datetime.fromisoformat(position_data['timestamp'])
+                        )
+                        
+                        # S'assurer que le statut est OPEN
+                        trade.status = TradeStatus.OPEN
+                        
+                        # Restaurer dans open_positions
+                        self.open_positions[trade_id] = trade
+                        positions_restored += 1
+                        
+                        self.logger.info(f"📂 Position restaurée depuis Firebase: {pair}")
+                        self.logger.info(f"   💰 Prix entrée: {trade.entry_price:.4f}")
+                        self.logger.info(f"   🛑 Stop Loss: {trade.stop_loss:.4f}")
+                        self.logger.info(f"   🎯 Take Profit: {trade.take_profit:.4f}")
+                        
+                    else:
+                        self.logger.warning(f"⚠️ Position {pair} ignorée - solde insuffisant")
+                        # Nettoyer cette position obsolète de Firebase
+                        if self.firebase_logger.firestore_db:
+                            self.firebase_logger.firestore_db.collection('position_states').document(trade_id).delete()
+                        
+                except Exception as e:
+                    self.logger.error(f"❌ Erreur restauration position Firebase {position_data.get('trade_id', 'unknown')}: {e}")
+            
+            if positions_restored > 0:
+                self.logger.info(f"✅ {positions_restored} position(s) restaurée(s) avec SL/TP depuis Firebase")
+                
+                # Firebase logging pour restauration
+                if self.firebase_logger:
+                    self.firebase_logger.log_message(
+                        level="INFO",
+                        message=f"POSITIONS RESTAURÉES FIREBASE: {positions_restored} positions avec SL/TP intacts",
+                        module="firebase_persistence",
+                        additional_data={
+                            'positions_restored': positions_restored,
+                            'total_saved': len(saved_positions)
+                        }
+                    )
+            else:
+                self.logger.info("📂 Aucune position à restaurer depuis Firebase")
+                
+        except Exception as e:
+            self.logger.error(f"❌ Erreur chargement positions Firebase: {e}")
 
     async def initialize_capital(self):
         """Initialise le capital à partir de l'API Binance (USDC + valeur crypto)"""
@@ -797,6 +928,27 @@ class ScalpingBot:
             # Ajout aux positions ouvertes avec ID unique
             trade_id = f"{symbol}_{trade.id}_{int(datetime.now().timestamp())}"
             self.open_positions[trade_id] = trade
+
+            # 🔥 Sauvegarde immédiate en Firebase
+            try:
+                if self.firebase_logger and self.firebase_logger.firebase_initialized and self.firebase_logger.firestore_db:
+                    position_data = {
+                        'trade_id': trade_id,
+                        'pair': symbol,
+                        'entry_price': current_price,
+                        'stop_loss': stop_loss,
+                        'take_profit': take_profit,
+                        'size': quantity,
+                        'timestamp': datetime.now().isoformat(),
+                        'trailing_stop': trailing_stop,
+                        'direction': direction.value if hasattr(direction, 'value') else str(direction),
+                        'saved_at': datetime.now().isoformat(),
+                        'session_id': self.firebase_logger.session_id
+                    }
+                    self.firebase_logger.firestore_db.collection('position_states').document(trade_id).set(position_data)
+                    self.logger.debug(f"🔥 Position {trade_id} sauvegardée en Firebase")
+            except Exception as e:
+                self.logger.error(f"❌ Erreur sauvegarde position Firebase {trade_id}: {e}")
 
             # Enregistrement du timestamp pour éviter la fragmentation
             self.last_trade_time[symbol] = datetime.now()
@@ -1477,6 +1629,14 @@ class ScalpingBot:
             # Suppression de la position ouverte
             del self.open_positions[trade_id]
             
+            # 🔥 Suppression de la position sauvegardée en Firebase
+            try:
+                if self.firebase_logger and self.firebase_logger.firebase_initialized and self.firebase_logger.firestore_db:
+                    self.firebase_logger.firestore_db.collection('position_states').document(trade_id).delete()
+                    self.logger.debug(f"🔥 Position {trade_id} supprimée de Firebase")
+            except Exception as e:
+                self.logger.error(f"❌ Erreur suppression position Firebase {trade_id}: {e}")
+            
             # Logging
             pnl_symbol = "🚀" if pnl_amount > 0 else "📉"
             self.logger.info(f"{pnl_symbol} Trade fermé : {symbol} ({reason})")
@@ -1588,6 +1748,14 @@ class ScalpingBot:
             
             # Suppression de la position ouverte
             del self.open_positions[trade_id]
+            
+            # 🔥 Suppression de la position sauvegardée en Firebase
+            try:
+                if self.firebase_logger and self.firebase_logger.firebase_initialized and self.firebase_logger.firestore_db:
+                    self.firebase_logger.firestore_db.collection('position_states').document(trade_id).delete()
+                    self.logger.debug(f"🔥 Position virtuelle {trade_id} supprimée de Firebase")
+            except Exception as e:
+                self.logger.error(f"❌ Erreur suppression position virtuelle Firebase {trade_id}: {e}")
             
             # Logging spécial pour fermeture virtuelle
             pnl_symbol = "⚠️" 
