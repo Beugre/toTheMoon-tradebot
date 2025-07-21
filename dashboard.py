@@ -17,6 +17,7 @@ import plotly.graph_objects as go
 import pytz  # Pour le fuseau horaire Paris
 import streamlit as st
 from firebase_admin import credentials, firestore
+from streamlit_autorefresh import st_autorefresh  # Auto-refresh automatique
 
 # Configuration timezone Paris
 PARIS_TZ = pytz.timezone('Europe/Paris')
@@ -660,33 +661,34 @@ def main():
     st.sidebar.success("🔥 Firebase: Connecté")
     st.sidebar.info(f"🕐 Dernière MAJ: {now_paris().strftime('%H:%M:%S')}")
     
-    # 🔄 AUTO-REFRESH GLOBAL (corrigé)
-    auto_refresh = st.sidebar.checkbox("🔄 Auto-refresh (10s)", value=True, key="global_refresh")
+    # 🔄 AUTO-REFRESH AUTOMATIQUE - STREAMLIT-AUTOREFRESH
+    st.sidebar.markdown("### 🔄 Actualisation")
+    
+    # Auto-refresh activé par défaut toutes les 10 secondes
+    refresh_interval = st.sidebar.selectbox(
+        "Intervalle auto-refresh",
+        options=[5, 10, 15, 30, 60],
+        index=1,  # 10 secondes par défaut
+        format_func=lambda x: f"{x} secondes"
+    )
+    
+    auto_refresh_enabled = st.sidebar.checkbox("🔄 Auto-refresh", value=True)
     
     # Bouton de rafraîchissement manuel
-    if st.sidebar.button("🔄 Actualiser"):
+    if st.sidebar.button("🔄 Actualiser maintenant"):
         st.rerun()
     
-    # Initialiser session state pour auto-refresh
-    if 'last_refresh' not in st.session_state:
-        st.session_state.last_refresh = now_paris()
-    
-    # Auto-refresh logic fiable
-    if auto_refresh:
-        now = now_paris()
+    # Auto-refresh avec streamlit-autorefresh
+    if auto_refresh_enabled:
+        # Convertir en millisecondes pour st_autorefresh
+        interval_ms = refresh_interval * 1000
+        count = st_autorefresh(interval=interval_ms, key="data_refresh")
         
-        # S'assurer que les deux datetime ont le même timezone
-        if st.session_state.last_refresh.tzinfo is None:
-            # Convertir en timezone Paris si pas de timezone
-            last_refresh = PARIS_TZ.localize(st.session_state.last_refresh)
-        else:
-            last_refresh = st.session_state.last_refresh
-        
-        time_since_refresh = (now - last_refresh).total_seconds()
-        
-        if time_since_refresh >= 10:  # 10 secondes écoulées
-            st.session_state.last_refresh = now
-            st.rerun()
+        # Afficher le statut
+        st.sidebar.success(f"🔄 Auto-refresh actif ({refresh_interval}s)")
+        st.sidebar.caption(f"Refresh #{count}")
+    else:
+        st.sidebar.info("⏸️ Auto-refresh désactivé")
     
     # Navigation vers les pages (toujours afficher le contenu)
     if page == "🎯 Vue d'ensemble":
