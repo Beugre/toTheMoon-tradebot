@@ -29,17 +29,17 @@ from oauth2client.service_account import ServiceAccountCredentials
 from telegram import Bot
 
 # Configuration
-from config import API_CONFIG, TradingConfig
+from config import API_CONFIG, BLACKLISTED_PAIRS, TradingConfig
 from trading_hours import (get_current_trading_session, get_hours_status_message,
                            get_trading_intensity, is_trading_hours_active)
 from utils.database import TradingDatabase
 from utils.enhanced_sheets_logger import EnhancedSheetsLogger
-from utils.firebase_logger import firebase_logger
+from utils.firebase_logger import firebase_logger  # type: ignore
 from utils.logger import setup_logger
 from utils.risk_manager import RiskManager
 from utils.technical_indicators import TechnicalAnalyzer
 from utils.telegram_notifier import TelegramNotifier
-from utils.trading_hours_notifier import TradingHoursNotifier
+from utils.trading_hours_notifier import TradingHoursNotifier  # type: ignore
 
 
 class TradeDirection(Enum):
@@ -140,6 +140,12 @@ class ScalpingBot:
         self.last_trade_time: Dict[str, datetime] = {}  # Derniers trades par paire
         self.daily_target_reached = False
         self.daily_stop_loss_hit = False
+        
+        # OPTIMISÉ: Suivi des nouvelles protections
+        self.trades_per_hour: List[datetime] = []  # Historique des trades par heure
+        self.consecutive_losses = 0  # Compteur pertes consécutives
+        self.last_trade_results: List[bool] = []  # Historique résultats (True=profit, False=perte)
+        self.consecutive_loss_pause_until: Optional[datetime] = None  # Pause jusqu'à cette datetime
         
         # Base de données
         self.database = TradingDatabase()
@@ -296,6 +302,25 @@ class ScalpingBot:
                     await self.handle_daily_stop()
                     break
                 
+                # OPTIMISÉ: Vérification pause après pertes consécutives
+                if self.consecutive_loss_pause_until:
+                    now = datetime.now()
+                    if now < self.consecutive_loss_pause_until:
+                        remaining_minutes = (self.consecutive_loss_pause_until - now).total_seconds() / 60
+                        self.logger.info(f"⏸️ En pause de sécurité - Reprise dans {remaining_minutes:.0f} minutes")
+                        await asyncio.sleep(60)  # Vérifier toutes les minutes
+                        continue
+                    else:
+                        # Fin de pause
+                        self.logger.info(f"✅ FIN DE PAUSE: Reprise du trading normal")
+                        self.consecutive_loss_pause_until = None
+                        
+                        # Notification Telegram de reprise
+                        message = f"✅ REPRISE DU TRADING\n"
+                        message += f"Fin de la pause de sécurité\n"
+                        message += f"Le bot reprend ses activités normalement"
+                        await self.telegram_notifier.send_message(message)
+                
                 # Affichage status horaires
                 hours_status = get_hours_status_message(self.config)
                 self.logger.info(f"⏰ {hours_status}")
@@ -379,6 +404,11 @@ class ScalpingBot:
             
             for ticker in usdc_pairs:
                 symbol = ticker['symbol']
+
+                # Exclusion des paires blacklistées
+                if symbol in BLACKLISTED_PAIRS:
+                    self.logger.debug(f"⚫ {symbol} exclu (blacklisté)")
+                    continue
                 
                 # Vérification volume minimum
                 volume_usdc = float(ticker['quoteVolume'])
@@ -730,6 +760,24 @@ class ScalpingBot:
             # Capital avant trade (AVANT l'achat)
             capital_before_trade = self.get_total_capital()
             
+            # OPTIMISÉ R2: Vérification confirmation de cassure
+            if not self.check_breakout_confirmation(symbol, current_price):
+                self.logger.info(f"❌ Trade {symbol} refusé: Cassure non confirmée")
+                
+                # Firebase logging pour cassure non confirmée
+                if self.firebase_logger:
+                    self.firebase_logger.log_message(
+                        level="WARNING",
+                        message=f"❌ CASSURE NON CONFIRMÉE: {symbol}",
+                        module="trade_execution",
+                        pair=symbol,
+                        additional_data={
+                            'current_price': current_price,
+                            'reason': 'breakout_not_confirmed'
+                        }
+                    )
+                return
+            
             # Passage de l'ordre
             order = self.binance_client.order_market_buy(
                 symbol=symbol,
@@ -752,6 +800,9 @@ class ScalpingBot:
             # Ajout aux positions ouvertes avec ID unique
             trade_id = f"{symbol}_{trade.id}_{int(datetime.now().timestamp())}"
             self.open_positions[trade_id] = trade
+            
+            # OPTIMISÉ: Mise à jour des compteurs de suivi
+            self.trades_per_hour.append(datetime.now())  # Enregistrer le trade pour limite horaire
             
             # Mise à jour du capital
             self.current_capital -= position_size
@@ -1352,6 +1403,72 @@ class ScalpingBot:
             pnl_percent = (exit_price - trade.entry_price) / trade.entry_price * 100
             trade.pnl = pnl_amount
             
+            # OPTIMISÉ: Mise à jour du suivi des résultats
+            is_profit = pnl_amount > 0
+            self.update_trade_result(is_profit)
+            
+            # OPTIMISÉ: Vérification arrêt après pertes consécutives
+            if self.consecutive_losses >= self.config.MAX_CONSECUTIVE_LOSSES and self.config.ENABLE_CONSECUTIVE_LOSS_PROTECTION:
+                if self.config.AUTO_RESUME_AFTER_PAUSE:
+                    # Mode pause temporaire
+                    self.consecutive_loss_pause_until = datetime.now() + timedelta(minutes=self.config.CONSECUTIVE_LOSS_PAUSE_MINUTES)
+                    
+                    self.logger.warning(f"⏸️ PAUSE TEMPORAIRE: {self.consecutive_losses} pertes consécutives")
+                    self.logger.warning(f"   Reprise prévue: {self.consecutive_loss_pause_until.strftime('%H:%M:%S')}")
+                    self.logger.warning(f"   Durée: {self.config.CONSECUTIVE_LOSS_PAUSE_MINUTES} minutes")
+                    
+                    # Firebase logging pour pause temporaire
+                    if self.firebase_logger:
+                        self.firebase_logger.log_message(
+                            level="WARNING", 
+                            message=f"⏸️ PAUSE TEMPORAIRE: {self.consecutive_losses} pertes consécutives",
+                            module="risk_management",
+                            additional_data={
+                                'consecutive_losses': self.consecutive_losses,
+                                'pause_duration_minutes': self.config.CONSECUTIVE_LOSS_PAUSE_MINUTES,
+                                'resume_at': self.consecutive_loss_pause_until.isoformat(),
+                                'last_trade_results': self.last_trade_results
+                            }
+                        )
+                    
+                    # Notification Telegram de pause
+                    message = f"⏸️ PAUSE TEMPORAIRE ACTIVÉE\n"
+                    message += f"Raison: {self.consecutive_losses} pertes consécutives\n"
+                    message += f"Dernière perte: {pnl_amount:+.2f} USDC ({pnl_percent:+.2f}%)\n"
+                    message += f"Reprise prévue: {self.consecutive_loss_pause_until.strftime('%H:%M:%S')}\n"
+                    message += f"Durée: {self.config.CONSECUTIVE_LOSS_PAUSE_MINUTES} minutes"
+                    
+                    await self.telegram_notifier.send_message(message)
+                    
+                else:
+                    # Mode arrêt définitif (ancien comportement)
+                    self.logger.error(f"🚨 ARRÊT AUTOMATIQUE: {self.consecutive_losses} pertes consécutives atteintes!")
+                    
+                    # Firebase logging pour arrêt automatique
+                    if self.firebase_logger:
+                        self.firebase_logger.log_message(
+                            level="CRITICAL",
+                            message=f"🚨 BOT ARRÊTÉ: {self.consecutive_losses} pertes consécutives",
+                            module="risk_management",
+                            additional_data={
+                                'consecutive_losses': self.consecutive_losses,
+                                'max_allowed': self.config.MAX_CONSECUTIVE_LOSSES,
+                                'last_trade_results': self.last_trade_results
+                            }
+                        )
+                    
+                    # Notification Telegram d'urgence
+                    message = f"🚨 BOT ARRÊTÉ AUTOMATIQUEMENT\n"
+                    message += f"Raison: {self.consecutive_losses} pertes consécutives\n"
+                    message += f"Dernière perte: {pnl_amount:+.2f} USDC ({pnl_percent:+.2f}%)\n"
+                    message += f"Protection activée pour préserver le capital"
+                    
+                    await self.telegram_notifier.send_message(message)
+                    
+                    # Arrêt du bot
+                    self.is_running = False
+                    return
+            
             # Mise à jour des totaux
             self.current_capital += (trade.entry_price * trade.size) + pnl_amount
             self.daily_pnl += pnl_amount
@@ -1936,12 +2053,20 @@ class ScalpingBot:
         current_trades = self.count_trades_per_pair(symbol)
         if current_trades >= self.config.MAX_TRADES_PER_PAIR:
             return False, f"Limite trades par paire atteinte ({current_trades}/{self.config.MAX_TRADES_PER_PAIR})"
-        
-        # 2. Vérifier volatilité minimum
+
+        # 2. OPTIMISÉ: Vérifier limite trades par heure
+        if not self.can_trade_within_hourly_limit():
+            return False, f"Limite trades par heure atteinte ({len(self.trades_per_hour)}/{self.config.MAX_TRADES_PER_HOUR})"
+
+        # 3. OPTIMISÉ: Vérifier protection contre pertes consécutives
+        if not self.can_trade_after_consecutive_losses():
+            return False, f"Bot arrêté après {self.consecutive_losses} pertes consécutives"
+
+        # 4. Vérifier volatilité minimum
         if volatility < self.config.MIN_VOLATILITY_1H_PERCENT:
             return False, f"Volatilité insuffisante ({volatility:.2f}% < {self.config.MIN_VOLATILITY_1H_PERCENT}%)"
         
-        # 3. Vérifier nombre total de positions
+        # 5. Vérifier nombre total de positions
         total_open_positions = len(self.open_positions)
         if total_open_positions >= self.config.MAX_OPEN_POSITIONS:
             return False, f"Limite positions totales atteinte ({total_open_positions}/{self.config.MAX_OPEN_POSITIONS})"
@@ -2043,6 +2168,99 @@ class ScalpingBot:
         except Exception as e:
             self.logger.error(f"❌ Erreur vérification momentum {trade.pair}: {e}")
             return False, ""
+
+    # OPTIMISÉ: Nouvelles fonctions de protection
+    def clean_old_trades_from_hour(self):
+        """Nettoie les trades de plus d'une heure"""
+        now = datetime.now()
+        self.trades_per_hour = [
+            trade_time for trade_time in self.trades_per_hour 
+            if (now - trade_time).total_seconds() < 3600  # 1 heure = 3600 secondes
+        ]
+
+    def can_trade_within_hourly_limit(self) -> bool:
+        """Vérifie si on peut trader selon la limite horaire"""
+        self.clean_old_trades_from_hour()
+        return len(self.trades_per_hour) < self.config.MAX_TRADES_PER_HOUR
+
+    def can_trade_after_consecutive_losses(self) -> bool:
+        """Vérifie si on peut trader après vérification des pertes consécutives"""
+        if not self.config.ENABLE_CONSECUTIVE_LOSS_PROTECTION:
+            return True
+        
+        # Vérifier si on est en pause
+        if self.consecutive_loss_pause_until:
+            now = datetime.now()
+            if now < self.consecutive_loss_pause_until:
+                return False  # Encore en pause
+            else:
+                # Fin de pause - reprendre le trading
+                self.logger.info(f"✅ FIN DE PAUSE: Reprise du trading après pause de sécurité")
+                self.consecutive_loss_pause_until = None
+                return True
+        
+        return self.consecutive_losses < self.config.MAX_CONSECUTIVE_LOSSES
+
+    def update_trade_result(self, is_profit: bool):
+        """Met à jour le suivi des résultats de trades"""
+        self.last_trade_results.append(is_profit)
+        
+        # Garder seulement les 10 derniers trades
+        if len(self.last_trade_results) > 10:
+            self.last_trade_results.pop(0)
+        
+        # Si c'est un profit, reset le compteur de pertes consécutives et la pause
+        if is_profit:
+            if self.consecutive_losses > 0:
+                self.logger.info(f"✅ PROFIT: Reset du compteur de pertes consécutives ({self.consecutive_losses} → 0)")
+            self.consecutive_losses = 0
+            self.consecutive_loss_pause_until = None  # Annuler toute pause en cours
+        else:
+            # Compter les pertes consécutives depuis la fin
+            self.consecutive_losses = 0
+            for result in reversed(self.last_trade_results):
+                if not result:  # Si c'est une perte
+                    self.consecutive_losses += 1
+                else:  # Si c'est un profit, arrêter le comptage
+                    break
+        
+        # Log important si on approche de la limite
+        if self.consecutive_losses >= self.config.MAX_CONSECUTIVE_LOSSES - 1:
+            self.logger.warning(f"⚠️ ATTENTION: {self.consecutive_losses} pertes consécutives (limite: {self.config.MAX_CONSECUTIVE_LOSSES})")
+
+    def check_breakout_confirmation(self, symbol: str, current_price: float) -> bool:
+        """Vérifie la confirmation de cassure"""
+        if not self.config.ENABLE_BREAKOUT_CONFIRMATION:
+            return True
+        
+        try:
+            # Récupérer les dernières bougies pour trouver le dernier sommet
+            klines = self.binance_client.get_klines(
+                symbol=symbol,
+                interval=Client.KLINE_INTERVAL_1MINUTE,
+                limit=20
+            )
+            
+            if len(klines) < 10:
+                return True  # Pas assez de données, on laisse passer
+            
+            # Trouver le plus haut des 20 dernières minutes
+            highs = [float(k[2]) for k in klines[:-1]]  # Exclure la bougie courante
+            last_high = max(highs)
+            
+            # Vérifier si le prix actuel dépasse le dernier sommet + seuil
+            confirmation_threshold = last_high * (1 + self.config.BREAKOUT_CONFIRMATION_PERCENT / 100)
+            
+            if current_price > confirmation_threshold:
+                self.logger.info(f"✅ Cassure confirmée {symbol}: {current_price:.4f} > {confirmation_threshold:.4f}")
+                return True
+            else:
+                self.logger.debug(f"❌ Cassure non confirmée {symbol}: {current_price:.4f} ≤ {confirmation_threshold:.4f}")
+                return False
+                
+        except Exception as e:
+            self.logger.error(f"❌ Erreur vérification cassure {symbol}: {e}")
+            return True  # En cas d'erreur, on laisse passer
 
     async def check_market_volatility(self, top_pairs: List):
         """Vérifie la volatilité moyenne du marché et envoie des notifications"""

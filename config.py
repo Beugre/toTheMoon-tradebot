@@ -29,11 +29,12 @@ class TradingConfig:
     MAX_EXPOSURE_PER_ASSET_PERCENT: float = 30.0  # Exposition max par crypto (30% pour haute liquidité)
     STOP_LOSS_PERCENT: float = 0.25  # SL plus serré pour limiter pertes
     TAKE_PROFIT_PERCENT: float = 1.2  # TP optimisé pour USDC haute liquidité
-    TRAILING_ACTIVATION_PERCENT: float = 0.1  # Activation trailing dès 0.1%
+    TRAILING_ACTIVATION_PERCENT: float = 0.5  # OPTIMISÉ: Activation trailing à +0.5% (plus conservateur)
     TRAILING_STEP_PERCENT: float = 0.2  # Step trailing plus fin
     
-    # Paramètres anti-fragmentation
-    MIN_TRADE_INTERVAL_SECONDS: int = 60  # Minimum 1 minute entre trades sur même paire
+    # Paramètres anti-fragmentation - OPTIMISÉS ANTI-SURTRADING
+    MIN_TRADE_INTERVAL_SECONDS: int = 300  # OPTIMISÉ: Minimum 5 minutes entre trades
+    MAX_TRADES_PER_HOUR: int = 2  # OPTIMISÉ: Maximum 2 trades par heure
     CONSOLIDATE_SMALL_TRADES: bool = True  # Consolider les petits trades
     
     # Paramètres de timeout adaptatifs
@@ -42,10 +43,10 @@ class TradingConfig:
     MIN_TIMEOUT_PROFIT_RANGE: tuple = (-0.2, 0.2)  # Range P&L pour timeout
     MIN_PROFIT_BEFORE_TIMEOUT: float = 0.1  # Sortie plus rapide si petit profit
     
-    # Paramètres de sélection des paires USDC - Critères renforcés
-    MIN_VOLUME_USDC: float = 50000000  # Volume minimum 50M$ (très liquide)
-    MAX_SPREAD_PERCENT: float = 0.02  # Spread ultra-strict pour USDC
-    MAX_PAIRS_TO_ANALYZE: int = 8  # 8 meilleures paires USDC
+    # Paramètres de sélection des paires USDC - Critères renforcés OPTIMISÉS
+    MIN_VOLUME_USDC: float = 100000000  # OPTIMISÉ: Volume minimum 100M$ (ultra-liquide)
+    MAX_SPREAD_PERCENT: float = 0.15  # OPTIMISÉ: Spread plus strict 0.15% pour éviter slippage
+    MAX_PAIRS_TO_ANALYZE: int = 6  # OPTIMISÉ: Moins de paires, meilleures uniquement
     MIN_VOLATILITY_1H_PERCENT: float = 0.5  # Volatilité minimum 1h requise
     
     # Horaires de trading optimisés (heure française/européenne)
@@ -94,7 +95,11 @@ class TradingConfig:
     BOLLINGER_STD_DEV: int = 2
     
     # Seuils de signal - Plus sélectif pour capital élevé
-    MIN_SIGNAL_CONDITIONS: int = 4
+    MIN_SIGNAL_CONDITIONS: int = 4  # R7: Garder 4 conditions minimum
+    
+    # OPTIMISÉ R2: Confirmation de cassure pour éviter faux signaux
+    ENABLE_BREAKOUT_CONFIRMATION: bool = True  # Activer confirmation cassure
+    BREAKOUT_CONFIRMATION_PERCENT: float = 0.1  # Cassure confirmée si price > last_high + 0.1%
     
     # Paramètres de gestion des positions et soldes
     PHANTOM_POSITION_THRESHOLD: float = 0.00001  # Seuil position fantôme
@@ -108,6 +113,12 @@ class TradingConfig:
     MOMENTUM_RSI_THRESHOLD: int = 35  # RSI max pour sortie momentum (vraiment faible)
     MOMENTUM_MACD_NEGATIVE: bool = True  # MACD histogram négatif requis
     MOMENTUM_MIN_DURATION_MINUTES: int = 3  # Durée minimale avant sortie momentum (3 min)
+    
+    # OPTIMISÉ: Protection contre les pertes consécutives
+    MAX_CONSECUTIVE_LOSSES: int = 3  # Arrêt automatique après 3 pertes consécutives
+    ENABLE_CONSECUTIVE_LOSS_PROTECTION: bool = True  # Activer protection pertes consécutives
+    CONSECUTIVE_LOSS_PAUSE_MINUTES: int = 60  # Pause en minutes après pertes consécutives
+    AUTO_RESUME_AFTER_PAUSE: bool = True  # Reprendre automatiquement après pause
 
 @dataclass
 class APIConfig:
@@ -159,20 +170,26 @@ BLACKLISTED_PAIRS = [
     "BUSDUSDC", # Stablecoin deprecated
     "TUSDUSDC", # Stablecoin
     "PAXGUSDC", # Or tokenisé
+    "XRPUSDC",  # Mauvaise performance (-6.12 USDC)
+    "DOGEUSDC", # Mauvaise performance (-5.31 USDC)
+    "ADAUSDC",  # Mauvaise performance (-15.58 USDC)
+    "SUIUSDC"   # Mauvaise performance (-13.47 USDC)
 ]
 
-# Paires prioritaires USDC (haute liquidité)
+# Paires prioritaires USDC (haute liquidité) - OPTIMISÉES
 PRIORITY_USDC_PAIRS = [
-    'BTCUSDC',   # 2B$ volume/jour
-    'ETHUSDC',   # 1.5B$ volume/jour  
-    'SOLUSDC',   # 800M$ volume/jour
-    'XRPUSDC',   # 400M$ volume/jour
-    'DOGEUSDC',  # 300M$ volume/jour
-    'ADAUSDC',   # 200M$ volume/jour
+    'BTCUSDC',   # 2B$ volume/jour - Meilleure performance
+    'ETHUSDC',   # 1.5B$ volume/jour - Acceptable
+    'SOLUSDC',   # 800M$ volume/jour - Performance correcte
     'MATICUSDC', # 150M$ volume/jour
     'LTCUSDC',   # 150M$ volume/jour
     'LINKUSDC',  # 100M$ volume/jour
     'DOTUSDC',   # 80M$ volume/jour
+    # Paires BLACKLISTÉES pour mauvaises performances:
+    # 'XRPUSDC',   # -6.12 USDC (2 trades) - BLACKLISTÉ
+    # 'DOGEUSDC',  # -5.31 USDC (1 trade) - BLACKLISTÉ
+    # 'ADAUSDC',   # -15.58 USDC (4 trades) - BLACKLISTÉ
+    # 'SUIUSDC',   # -13.47 USDC (5 trades) - BLACKLISTÉ
 ]
 
 # Configuration du logging

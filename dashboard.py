@@ -178,10 +178,10 @@ def show_performance(db):
             
             pair_data = []
             for pair in pair_stats.index:
-                count = int(pair_stats.loc[pair, ('real_pnl', 'count')])
+                count = int(pair_stats.loc[pair, ('real_pnl', 'count')]) #type: ignore
                 total_pnl_pair = pair_stats.loc[pair, ('real_pnl', 'sum')]
                 avg_pnl_pair = pair_stats.loc[pair, ('real_pnl', 'mean')]
-                avg_duration = pair_stats.loc[pair, ('duration_seconds', 'mean')] / 60 if not pd.isna(pair_stats.loc[pair, ('duration_seconds', 'mean')]) else 0
+                avg_duration = pair_stats.loc[pair, ('duration_seconds', 'mean')] / 60 if not pd.isna(pair_stats.loc[pair, ('duration_seconds', 'mean')]) else 0 #type: ignore
                 
                 profitable_pair = len(df_pnl[(df_pnl['pair'] == pair) & (df_pnl['real_pnl'] > 0)])
                 win_rate_pair = (profitable_pair / count) * 100 if count > 0 else 0
@@ -393,19 +393,41 @@ def main():
     st.sidebar.success("🔥 Firebase: Connecté")
     st.sidebar.info(f"🕐 Dernière MAJ: {datetime.now().strftime('%H:%M:%S')}")
     
-    # Bouton de rafraîchissement
+    # 🔄 AUTO-REFRESH GLOBAL (nouveau)
+    auto_refresh = st.sidebar.checkbox("🔄 Auto-refresh (10s)", value=True, key="global_refresh")
+    
+    # Bouton de rafraîchissement manuel
     if st.sidebar.button("🔄 Actualiser"):
         st.rerun()
     
-    # Navigation vers les pages
-    if page == "🎯 Vue d'ensemble":
-        show_overview(db)
-    elif page == "📈 Performance":
-        show_performance(db)
-    elif page == "💹 Trades":
-        show_trades(db)
-    elif page == "🔔 Logs":
-        show_logs(db)
+    # Container principal pour l'auto-refresh
+    if auto_refresh:
+        # Placeholder pour l'auto-refresh
+        placeholder = st.empty()
+        with placeholder.container():
+            # Navigation vers les pages
+            if page == "🎯 Vue d'ensemble":
+                show_overview(db)
+            elif page == "📈 Performance":
+                show_performance(db)
+            elif page == "💹 Trades":
+                show_trades(db)
+            elif page == "🔔 Logs":
+                show_logs(db)
+        
+        # Auto-refresh toutes les 10 secondes
+        time.sleep(10)
+        st.rerun()
+    else:
+        # Mode normal (sans auto-refresh)
+        if page == "🎯 Vue d'ensemble":
+            show_overview(db)
+        elif page == "📈 Performance":
+            show_performance(db)
+        elif page == "💹 Trades":
+            show_trades(db)
+        elif page == "🔔 Logs":
+            show_logs(db)
 
 if __name__ == "__main__":
     main()
