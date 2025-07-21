@@ -16,6 +16,16 @@ import plotly.graph_objects as go
 import streamlit as st
 from firebase_admin import credentials, firestore
 
+# Import de la configuration
+try:
+    from config import BLACKLISTED_PAIRS, PRIORITY_USDC_PAIRS, APIConfig, TradingConfig
+except ImportError:
+    st.error("❌ Impossible d'importer la configuration depuis config.py")
+    TradingConfig = None
+    APIConfig = None
+    BLACKLISTED_PAIRS = []
+    PRIORITY_USDC_PAIRS = []
+
 # Configuration de la page
 st.set_page_config(
     page_title="🚀 ToTheMoon Bot Dashboard",
@@ -62,58 +72,96 @@ def get_real_time_data(db, collection_name: str, limit: int = 100) -> List[Dict]
         st.error(f"Erreur récupération {collection_name}: {str(e)}")
         return []
 
+def get_total_trades_count(db) -> int:
+    """Récupère le nombre total de trades dans Firebase"""
+    try:
+        if db is None:
+            return 0
+        
+        # Compter tous les documents dans la collection trades
+        docs = db.collection("trades").stream()
+        count = sum(1 for _ in docs)
+        return count
+    except Exception as e:
+        st.error(f"Erreur comptage trades: {str(e)}")
+        return 0
+
 def show_overview(db):
-    """Page Vue d'ensemble"""
+    """Page Vue d'ensemble - CORRIGÉE"""
     st.header("🎯 Vue d'Ensemble")
     
     # Indicateur de refresh temps réel
     st.caption(f"🔄 Données mises à jour: {datetime.now().strftime('%H:%M:%S')}")
     
-    # Récupération des données
-    trades = get_real_time_data(db, "trades", 10)
-    metrics = get_real_time_data(db, "metrics", 50)
+    # Récupération des données récentes pour affichage
+    recent_trades = get_real_time_data(db, "trades", 10)
     
-    if trades:
-        df_trades = pd.DataFrame(trades)
+    # Récupération du nombre total de trades
+    total_trades_count = get_total_trades_count(db)
+    
+    # Récupération de TOUS les trades pour les calculs P&L
+    all_trades = get_real_time_data(db, "trades", 1000)  # Augmenter la limite
+    
+    if recent_trades:
+        df_recent = pd.DataFrame(recent_trades)
         
-        # Calcul des vrais P&L
-        df_trades['real_pnl'] = df_trades['capital_after'] - df_trades['capital_before']
-        df_pnl = df_trades[df_trades['real_pnl'] != 0]
+        # Métriques basées sur les trades récents pour affichage capital actuel
+        capital_current = df_recent['capital_after'].iloc[0] if len(df_recent) > 0 else 0
+        
+        # Calculs P&L sur TOUS les trades
+        if all_trades:
+            df_all = pd.DataFrame(all_trades)
+            df_all['real_pnl'] = df_all['capital_after'] - df_all['capital_before']
+            df_pnl = df_all[df_all['real_pnl'] != 0]
+            
+            total_pnl = df_pnl['real_pnl'].sum() if len(df_pnl) > 0 else 0
+            profitable = len(df_pnl[df_pnl['real_pnl'] > 0]) if len(df_pnl) > 0 else 0
+            win_rate = (profitable / len(df_pnl)) * 100 if len(df_pnl) > 0 else 0
+        else:
+            total_pnl = 0
+            win_rate = 0
         
         # Métriques rapides
         col1, col2, col3, col4 = st.columns(4)
         
         with col1:
-            capital_current = df_trades['capital_after'].iloc[0] if len(df_trades) > 0 else 0
             st.metric("💰 Capital", f"{capital_current:,.2f} USDC")
         
         with col2:
-            if len(df_pnl) > 0:
-                total_pnl = df_pnl['real_pnl'].sum()
-                st.metric("📊 P&L Total", f"{total_pnl:+.4f} USDC")
-            else:
-                st.metric("📊 P&L Total", "0.0000 USDC")
+            st.metric("📊 P&L Total", f"{total_pnl:+.4f} USDC")
         
         with col3:
-            if len(df_pnl) > 0:
-                profitable = len(df_pnl[df_pnl['real_pnl'] > 0])
-                win_rate = (profitable / len(df_pnl)) * 100
-                st.metric("🎯 Taux Réussite", f"{win_rate:.1f}%")
-            else:
-                st.metric("🎯 Taux Réussite", "N/A")
+            st.metric("🎯 Taux Réussite", f"{win_rate:.1f}%")
         
         with col4:
-            st.metric("📈 Total Trades", len(df_trades))
+            # Afficher le VRAI nombre total de trades
+            st.metric("📈 Total Trades", f"{total_trades_count}")
+        
+        # Section trades récents
+        st.subheader("📋 Derniers Trades (10 plus récents)")
+        if len(df_recent) > 0:
+            df_recent['real_pnl'] = df_recent['capital_after'] - df_recent['capital_before']
+            df_recent['timestamp'] = pd.to_datetime(df_recent['timestamp'])
+            
+            display_recent = df_recent[['pair', 'real_pnl', 'capital_after', 'timestamp']].copy()
+            display_recent['P&L'] = display_recent['real_pnl'].apply(lambda x: f"{x:+.4f}")
+            display_recent['Heure'] = display_recent['timestamp'].dt.strftime('%H:%M:%S')
+            display_recent = display_recent[['pair', 'P&L', 'capital_after', 'Heure']]
+            display_recent.columns = ['Paire', 'P&L', 'Capital Après', 'Heure']
+            
+            st.dataframe(display_recent, use_container_width=True)
+    else:
+        st.info("Aucun trade disponible")
 
 def show_performance(db):
-    """Page Performance avec analyse réelle des P&L"""
+    """Page Performance avec analyse réelle des P&L - CORRIGÉE"""
     st.header("📈 Performance Trading - Analyse Réelle")
     
     # Indicateur de refresh temps réel
     st.caption(f"🔄 Données mises à jour: {datetime.now().strftime('%H:%M:%S')}")
     
-    # Récupération des trades (30 derniers pour analyse approfondie)
-    trades = get_real_time_data(db, "trades", 30)
+    # Récupération de TOUS les trades (augmenter limite pour avoir toutes les données)
+    trades = get_real_time_data(db, "trades", 1000)
     
     if not trades:
         st.error("❌ Aucun trade trouvé dans Firebase")
@@ -122,7 +170,7 @@ def show_performance(db):
     # Conversion en DataFrame
     df_trades = pd.DataFrame(trades)
     df_trades['timestamp'] = pd.to_datetime(df_trades['timestamp'])
-    df_trades = df_trades.sort_values('timestamp')
+    # Les données viennent déjà triées DESCENDING de Firebase, donc df_trades[0] = plus récent
     
     # Calcul des vrais P&L (capital_after - capital_before)
     df_trades['real_pnl'] = df_trades['capital_after'] - df_trades['capital_before']
@@ -140,9 +188,8 @@ def show_performance(db):
         win_rate = (profitable / len(df_pnl)) * 100 if len(df_pnl) > 0 else 0
         avg_pnl = df_pnl['real_pnl'].mean()
         
-        # Capital évolution (corriger l'ordre)
-        # Le premier élément (index 0) est le plus récent car données triées DESCENDING dans Firebase
-        # Le dernier élément (index -1) est le plus ancien après tri ascendant
+        # Capital évolution - CORRIGÉ
+        # df_trades[0] = plus récent (DESCENDING), df_trades[-1] = plus ancien
         capital_current = df_trades['capital_after'].iloc[0] if len(df_trades) > 0 else 0  # Plus récent
         capital_start = df_trades['capital_before'].iloc[-1] if len(df_trades) > 0 else 0   # Plus ancien
         
@@ -211,6 +258,7 @@ def show_performance(db):
         
         with col1:
             st.subheader("📈 P&L Cumulé")
+            # Trier par timestamp pour cumul chronologique
             df_pnl_sorted = df_pnl.sort_values('timestamp')
             df_pnl_sorted['pnl_cumule'] = df_pnl_sorted['real_pnl'].cumsum()
             
@@ -277,25 +325,27 @@ def show_performance(db):
         st.warning("⚠️ Aucun trade avec P&L réel trouvé")
         st.info("Les colonnes 'capital_before' et 'capital_after' sont nécessaires pour calculer les vrais P&L")
     
-    # === DONNÉES BRUTES ===
-    with st.expander("🔍 Données Brutes (Derniers 10 trades)"):
+    # === DONNÉES BRUTES (10 PLUS RÉCENTS) - CORRIGÉ ===
+    with st.expander("🔍 Données Brutes (10 plus récents)"):
         if len(df_trades) > 0:
+            # df_trades est déjà trié DESCENDING, donc les 10 premiers sont les plus récents
             recent_trades = df_trades.head(10)[['pair', 'real_pnl', 'capital_before', 'capital_after', 'timestamp']]
             st.dataframe(recent_trades, use_container_width=True)
 
 def show_trades(db):
-    """Page Trades détaillés"""
+    """Page Trades détaillés - CORRIGÉE"""
     st.header("💹 Trades Détaillés")
     
     # Indicateur de refresh temps réel
     st.caption(f"🔄 Données mises à jour: {datetime.now().strftime('%H:%M:%S')}")
     
-    trades = get_real_time_data(db, "trades", 50)
+    # Récupérer plus de trades pour avoir toutes les données
+    trades = get_real_time_data(db, "trades", 1000)
     
     if trades:
         df = pd.DataFrame(trades)
         df['timestamp'] = pd.to_datetime(df['timestamp'])
-        df = df.sort_values('timestamp', ascending=False)
+        # Les données viennent déjà triées DESCENDING, donc les plus récents en premier
         
         # Calcul P&L réel
         df['real_pnl'] = df['capital_after'] - df['capital_before']
@@ -380,8 +430,133 @@ def show_logs(db):
     else:
         st.info("Aucun log disponible")
 
+def show_config():
+    """Page Configuration - NOUVEAU"""
+    st.header("⚙️ Configuration du Bot")
+    
+    # Indicateur de refresh temps réel
+    st.caption(f"🔄 Configuration chargée: {datetime.now().strftime('%H:%M:%S')}")
+    
+    if TradingConfig is None:
+        st.error("❌ Configuration non disponible - Vérifiez config.py")
+        return
+    
+    config = TradingConfig()
+    
+    # === PARAMÈTRES DE CAPITAL ===
+    st.subheader("💰 Paramètres de Capital")
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.metric("🎯 Objectif Quotidien", f"{config.DAILY_TARGET_PERCENT}%")
+        st.metric("🛑 Stop Loss Quotidien", f"{config.DAILY_STOP_LOSS_PERCENT}%")
+        st.metric("💼 Taille Position Base", f"{config.BASE_POSITION_SIZE_PERCENT}%")
+        st.metric("💰 Position Min", f"{config.MIN_POSITION_SIZE_USDC} USDC")
+    
+    with col2:
+        st.metric("💰 Position Max", f"{config.MAX_POSITION_SIZE_USDC} USDC")
+        st.metric("📈 Positions Max", f"{config.MAX_OPEN_POSITIONS}")
+        st.metric("🔄 Trades/Paire Max", f"{config.MAX_TRADES_PER_PAIR}")
+        st.metric("📊 Exposition Max/Asset", f"{config.MAX_EXPOSURE_PER_ASSET_PERCENT}%")
+    
+    # === PARAMÈTRES DE TRADING ===
+    st.subheader("🎯 Paramètres de Trading")
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.metric("🔻 Stop Loss", f"{config.STOP_LOSS_PERCENT}%")
+        st.metric("🔺 Take Profit", f"{config.TAKE_PROFIT_PERCENT}%")
+        st.metric("📈 Trailing Activation", f"{config.TRAILING_ACTIVATION_PERCENT}%")
+        st.metric("📊 Trailing Step", f"{config.TRAILING_STEP_PERCENT}%")
+    
+    with col2:
+        st.metric("⏱️ Intervalle Min Trades", f"{config.MIN_TRADE_INTERVAL_SECONDS}s")
+        st.metric("⏰ Trades Max/Heure", f"{config.MAX_TRADES_PER_HOUR}")
+        st.metric("🔄 Scan Interval", f"{config.SCAN_INTERVAL}s")
+        st.metric("📊 Timeframe", config.TIMEFRAME)
+    
+    # === NOUVEAUX PARAMÈTRES OPTIMISÉS ===
+    st.subheader("🚀 Optimisations Récentes")
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.metric("💥 Pertes Consécutives Max", f"{config.MAX_CONSECUTIVE_LOSSES}")
+        st.metric("⏸️ Pause après Pertes", f"{config.CONSECUTIVE_LOSS_PAUSE_MINUTES} min")
+        breakout_status = "✅ Activé" if config.ENABLE_BREAKOUT_CONFIRMATION else "❌ Désactivé"
+        st.metric("🎯 Confirmation Cassure", breakout_status)
+        st.metric("📊 Seuil Cassure", f"{config.BREAKOUT_CONFIRMATION_PERCENT}%")
+    
+    with col2:
+        consecutive_protection = "✅ Activé" if config.ENABLE_CONSECUTIVE_LOSS_PROTECTION else "❌ Désactivé"
+        st.metric("🛡️ Protection Pertes", consecutive_protection)
+        auto_resume = "✅ Activé" if config.AUTO_RESUME_AFTER_PAUSE else "❌ Désactivé"
+        st.metric("🔄 Reprise Auto", auto_resume)
+        st.metric("💹 Volume Min", f"{config.MIN_VOLUME_USDC:,.0f}")
+        st.metric("📈 Spread Max", f"{config.MAX_SPREAD_PERCENT}%")
+    
+    # === PAIRES BLACKLISTÉES ===
+    st.subheader("⚫ Paires Blacklistées")
+    if BLACKLISTED_PAIRS:
+        st.write("Ces paires sont exclues du trading :")
+        cols = st.columns(len(BLACKLISTED_PAIRS))
+        for i, pair in enumerate(BLACKLISTED_PAIRS):
+            with cols[i % len(cols)]:
+                st.error(f"❌ {pair}")
+    else:
+        st.info("Aucune paire blacklistée")
+    
+    # === PAIRES PRIORITAIRES ===
+    st.subheader("✅ Paires Prioritaires")
+    if PRIORITY_USDC_PAIRS:
+        st.write("Ces paires sont privilégiées pour le trading :")
+        cols = st.columns(min(3, len(PRIORITY_USDC_PAIRS)))
+        for i, pair in enumerate(PRIORITY_USDC_PAIRS):
+            with cols[i % len(cols)]:
+                st.success(f"✅ {pair}")
+    else:
+        st.info("Aucune paire prioritaire définie")
+    
+    # === INDICATEURS TECHNIQUES ===
+    st.subheader("📊 Indicateurs Techniques")
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        st.write("**EMA**")
+        st.metric("EMA Rapide", f"{config.EMA_FAST_PERIOD}")
+        st.metric("EMA Lente", f"{config.EMA_SLOW_PERIOD}")
+    
+    with col2:
+        st.write("**RSI & MACD**")
+        st.metric("RSI Période", f"{config.RSI_PERIOD}")
+        st.metric("RSI Survente", f"{config.RSI_OVERSOLD_LEVEL}")
+        st.metric("MACD Rapide", f"{config.MACD_FAST_PERIOD}")
+    
+    with col3:
+        st.write("**Bollinger**")
+        st.metric("BB Période", f"{config.BOLLINGER_PERIOD}")
+        st.metric("BB Écart-Type", f"{config.BOLLINGER_STD_DEV}")
+        st.metric("Conditions Min", f"{config.MIN_SIGNAL_CONDITIONS}")
+    
+    # === CONFIGURATION API ===
+    if APIConfig:
+        st.subheader("🔑 Configuration API")
+        api_config = APIConfig()
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            testnet_status = "🧪 TESTNET" if api_config.TESTNET else "🔥 PRODUCTION"
+            st.metric("Mode", testnet_status)
+            binance_status = "✅ Configuré" if api_config.BINANCE_API_KEY else "❌ Manquant"
+            st.metric("Binance API", binance_status)
+        
+        with col2:
+            telegram_status = "✅ Configuré" if api_config.TELEGRAM_BOT_TOKEN else "❌ Manquant"
+            st.metric("Telegram", telegram_status)
+            sheets_status = "✅ Activé" if api_config.ENABLE_GOOGLE_SHEETS else "❌ Désactivé"
+            st.metric("Google Sheets", sheets_status)
+
 def main():
-    """Fonction principale du dashboard"""
+    """Fonction principale du dashboard - CORRIGÉE"""
     # Titre principal
     st.title("🚀 ToTheMoon Trading Bot Dashboard")
     st.markdown("*Dashboard temps réel avec analyse des vrais P&L*")
@@ -393,13 +568,14 @@ def main():
         st.error("❌ Impossible de se connecter à Firebase")
         st.stop()
     
-    # Sidebar navigation
+    # Sidebar navigation - AJOUT ONGLET CONFIG
     st.sidebar.title("Navigation")
     page = st.sidebar.radio("Aller à", 
                            ["🎯 Vue d'ensemble", 
                             "📈 Performance", 
                             "💹 Trades", 
-                            "🔔 Logs"])
+                            "🔔 Logs",
+                            "⚙️ Configuration"])
     
     # Status en sidebar
     st.sidebar.markdown("---")
@@ -436,6 +612,8 @@ def main():
         show_trades(db)
     elif page == "🔔 Logs":
         show_logs(db)
+    elif page == "⚙️ Configuration":
+        show_config()
     
     # JavaScript auto-refresh pour forcer le refresh côté client
     if auto_refresh:
