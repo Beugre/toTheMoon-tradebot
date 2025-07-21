@@ -1,13 +1,21 @@
 # 🚀 ToTheMoon Trading Bot - Commandes Utiles
 
-Ce fichier contient toutes les commandes essentielles pour gérer le bot de trading déployé sur le VPS.
+Ce fichier cont### Démarr### Arrêter le service
+
+```bash
+ssh root@213.199.41.168 "systemctl stop toTheMoon-bot"
+``` service
+
+```bash
+ssh root@213.199.41.168 "systemctl start toTheMoon-bot"
+```toutes les commandes essentielles pour gérer le bot de trading déployé sur le VPS.
 
 ## 🔧 Variables d'environnement
 
 ```bash
 VPS_HOST="root@213.199.41.168"
 BOT_DIR="/opt/toTheMoon_tradebot"
-SERVICE_NAME="tothemoon-tradebot"
+SERVICE_NAME="toTheMoon-bot"
 ```
 
 ## 📡 Connexion SSH
@@ -51,7 +59,7 @@ rsync -avz --progress \
     ./ root@213.199.41.168:/opt/toTheMoon_tradebot/
 
 # Redémarrage du service après mise à jour
-ssh root@213.199.41.168 "systemctl restart tothemoon-tradebot"
+ssh root@213.199.41.168 "systemctl restart toTheMoon-bot"
 ```
 
 ## ⚙️ Gestion du Service Systemd
@@ -59,37 +67,37 @@ ssh root@213.199.41.168 "systemctl restart tothemoon-tradebot"
 ### Statut du service
 
 ```bash
-ssh root@213.199.41.168 "systemctl status tothemoon-tradebot"
+ssh root@213.199.41.168 "systemctl status toTheMoon-bot"
 ```
 
 ### Démarrage du service
 
 ```bash
-ssh root@213.199.41.168 "systemctl start tothemoon-tradebot"
+ssh root@213.199.41.168 "systemctl start toTheMoon-bot"
 ```
 
 ### Arrêt du service
 
 ```bash
-ssh root@213.199.41.168 "systemctl stop tothemoon-tradebot"
+ssh root@213.199.41.168 "systemctl stop toTheMoon-bot"
 ```
 
-Redémarrage du service
+### Redémarrage du service
 
 ```bash
-ssh root@213.199.41.168 "systemctl restart tothemoon-tradebot"
+ssh root@213.199.41.168 "systemctl restart toTheMoon-bot"
 ```
 
 ### Activation au démarrage
 
 ```bash
-ssh root@213.199.41.168 "systemctl enable tothemoon-tradebot"
+ssh root@213.199.41.168 "systemctl enable toTheMoon-bot"
 ```
 
 ### Désactivation au démarrage
 
 ```bash
-ssh root@213.199.41.168 "systemctl disable tothemoon-tradebot"
+ssh root@213.199.41.168 "systemctl disable toTheMoon-bot"
 ```
 
 ### Rechargement de la configuration
@@ -103,25 +111,25 @@ ssh root@213.199.41.168 "systemctl daemon-reload"
 ### Logs en temps réel
 
 ```bash
-ssh root@213.199.41.168 "journalctl -u tothemoon-tradebot -f"
+ssh root@213.199.41.168 "journalctl -u toTheMoon-bot -f"
 ```
 
 ### Logs des dernières 24h
 
 ```bash
-ssh root@213.199.41.168 "journalctl -u tothemoon-tradebot --since '24 hours ago'"
+ssh root@213.199.41.168 "journalctl -u toTheMoon-bot --since '24 hours ago'"
 ```
 
 ### Logs avec nombre de lignes spécifique
 
 ```bash
-ssh root@213.199.41.168 "journalctl -u tothemoon-tradebot -n 100"
+ssh root@213.199.41.168 "journalctl -u toTheMoon-bot -n 100"
 ```
 
 ### Logs d'erreur uniquement
 
 ```bash
-ssh root@213.199.41.168 "journalctl -u tothemoon-tradebot -p err"
+ssh root@213.199.41.168 "journalctl -u toTheMoon-bot -p err"
 ```
 
 ### Vérification des processus Python
@@ -268,7 +276,7 @@ ssh root@213.199.41.168 "cd /opt/toTheMoon_tradebot && source venv/bin/activate 
 ### Arrêt d'urgence du bot
 
 ```bash
-ssh root@213.199.41.168 "systemctl stop tothemoon-tradebot && pkill -f run.py"
+ssh root@213.199.41.168 "systemctl stop toTheMoon-bot && pkill -f run.py"
 ```
 
 ### Fermeture de toutes les positions ouvertes
@@ -288,7 +296,7 @@ ssh root@213.199.41.168 "cd /opt/toTheMoon_tradebot && source venv/bin/activate 
 ### One-liner pour vérifier que tout va bien
 
 ```bash
-ssh root@213.199.41.168 "systemctl is-active tothemoon-tradebot && echo '✅ Service actif' || echo '❌ Service arrêté'"
+ssh root@213.199.41.168 "systemctl is-active toTheMoon-bot && echo '✅ Service actif' || echo '❌ Service arrêté'"
 ```
 
 ### Résumé complet du statut
@@ -297,12 +305,12 @@ ssh root@213.199.41.168 "systemctl is-active tothemoon-tradebot && echo '✅ Ser
 ssh root@213.199.41.168 "
 echo '🔍 STATUT DU BOT TOTHEMOON'
 echo '========================='
-echo '📊 Service:' \$(systemctl is-active tothemoon-tradebot)
+echo '📊 Service:' \$(systemctl is-active toTheMoon-bot)
 echo '💾 Mémoire:' \$(ps -o pid,ppid,cmd,%mem,%cpu --sort=-%mem -p \$(pgrep -f run.py) | tail -n +2)
 echo '📁 Espace disque:' \$(df -h /opt/toTheMoon_tradebot | tail -1 | awk '{print \$4\" disponible\"}')
-echo '🕐 Uptime:' \$(systemctl show tothemoon-tradebot --property=ActiveEnterTimestamp --value)
+echo '🕐 Uptime:' \$(systemctl show toTheMoon-bot --property=ActiveEnterTimestamp --value)
 echo '📈 Dernière activité:'
-journalctl -u tothemoon-tradebot -n 3 --no-pager
+journalctl -u toTheMoon-bot -n 3 --no-pager
 "
 ```
 

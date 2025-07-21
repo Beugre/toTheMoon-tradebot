@@ -653,14 +653,17 @@ def main():
     if 'last_refresh' not in st.session_state:
         st.session_state.last_refresh = datetime.now()
     
-    # Auto-refresh logic (sans time.sleep qui bloque l'UI)
+    # Auto-refresh logic fiable
     if auto_refresh:
         now = datetime.now()
         time_since_refresh = (now - st.session_state.last_refresh).total_seconds()
         
         if time_since_refresh >= 10:  # 10 secondes écoulées
             st.session_state.last_refresh = now
-            st.rerun()
+            # Utilisation d'un placeholder qui force le rerun
+            placeholder = st.empty()
+            with placeholder:
+                st.rerun()
     
     # Navigation vers les pages (toujours afficher le contenu)
     if page == "🎯 Vue d'ensemble":
@@ -673,16 +676,6 @@ def main():
         show_logs(db)
     elif page == "⚙️ Configuration":
         show_config()
-    
-    # JavaScript auto-refresh pour forcer le refresh côté client
-    if auto_refresh:
-        st.markdown("""
-        <script>
-        setTimeout(function(){
-            window.location.reload();
-        }, 10000);
-        </script>
-        """, unsafe_allow_html=True)
 
 if __name__ == "__main__":
     main()

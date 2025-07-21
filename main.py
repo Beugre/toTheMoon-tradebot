@@ -1546,7 +1546,13 @@ class ScalpingBot:
                         'duration_seconds': trade.duration.total_seconds() if trade.duration else 0,
                         'exit_reason': reason,
                         'daily_pnl': self.daily_pnl,
-                        'total_capital': total_capital
+                        'total_capital': total_capital,
+                        'stop_loss': trade.stop_loss,
+                        'take_profit': trade.take_profit,
+                        'capital_before': total_capital - pnl_amount,
+                        'capital_after': total_capital,
+                        'pnl_gross': pnl_amount,
+                        'pnl_net': pnl_amount  # À ajuster si vous avez des frais à déduire
                     }
                     self.firebase_logger.log_trade(trade_data)
                 except Exception as e:
@@ -1616,6 +1622,33 @@ class ScalpingBot:
                     self.logger.info(f"📊 Trade virtuel mis à jour en base (ID: {trade.db_id})")
                 except Exception as e:
                     self.logger.error(f"❌ Erreur mise à jour DB virtuelle: {e}")
+            
+            # Log Firebase pour fermeture virtuelle de trade
+            if self.firebase_logger:
+                try:
+                    trade_data = {
+                        'trade_id': trade_id,
+                        'pair': trade.pair,
+                        'direction': trade.direction.value,
+                        'size': trade.size,
+                        'entry_price': trade.entry_price,
+                        'exit_price': exit_price,
+                        'pnl_amount': pnl_amount,
+                        'pnl_percent': pnl_percent,
+                        'duration_seconds': trade.duration.total_seconds() if trade.duration else 0,
+                        'exit_reason': f"{reason}_VIRTUAL",
+                        'daily_pnl': self.daily_pnl,
+                        'total_capital': total_capital,
+                        'stop_loss': trade.stop_loss,
+                        'take_profit': trade.take_profit,
+                        'capital_before': total_capital - pnl_amount,
+                        'capital_after': total_capital,
+                        'pnl_gross': pnl_amount,
+                        'pnl_net': pnl_amount  # Pas de frais en fermeture virtuelle
+                    }
+                    self.firebase_logger.log_trade(trade_data)
+                except Exception as e:
+                    self.logger.error(f"❌ Erreur log Firebase fermeture virtuelle: {e}")
             
         except Exception as e:
             self.logger.error(f"❌ Erreur fermeture virtuelle {trade_id}: {e}")
