@@ -80,10 +80,19 @@ def init_firebase():
     except ValueError:
         # Initialiser Firebase avec les credentials
         try:
-            cred = credentials.Certificate('firebase_credentials.json')
-            firebase_admin.initialize_app(cred)
+            # Essayer d'abord les secrets Streamlit Cloud
+            if hasattr(st, 'secrets') and 'firebase' in st.secrets:
+                # Utiliser les secrets Streamlit Cloud
+                firebase_credentials = dict(st.secrets['firebase'])
+                cred = credentials.Certificate(firebase_credentials)
+                firebase_admin.initialize_app(cred)
+            else:
+                # Fallback sur le fichier local
+                cred = credentials.Certificate('firebase_credentials.json')
+                firebase_admin.initialize_app(cred)
         except Exception as e:
             st.error(f"Erreur d'initialisation Firebase: {str(e)}")
+            st.info("💡 Vérifiez que les secrets Firebase sont configurés dans Streamlit Cloud")
             return None
     
     return firestore.client()
