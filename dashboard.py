@@ -5,6 +5,7 @@ Interface temps réel connectée à Firebase - VERSION CORRIGÉE AVEC VRAIS P&L
 
 import json
 import os
+import sys
 import time
 from datetime import datetime, timedelta
 from typing import Any, Dict, List
@@ -16,16 +17,6 @@ import plotly.graph_objects as go
 import streamlit as st
 from firebase_admin import credentials, firestore
 
-# Import de la configuration
-try:
-    from config import BLACKLISTED_PAIRS, PRIORITY_USDC_PAIRS, APIConfig, TradingConfig
-except ImportError:
-    st.error("❌ Impossible d'importer la configuration depuis config.py")
-    TradingConfig = None
-    APIConfig = None
-    BLACKLISTED_PAIRS = []
-    PRIORITY_USDC_PAIRS = []
-
 # Configuration de la page
 st.set_page_config(
     page_title="🚀 ToTheMoon Bot Dashboard",
@@ -33,6 +24,53 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
+
+# Import de la configuration avec gestion d'erreur améliorée
+TradingConfig = None
+APIConfig = None
+BLACKLISTED_PAIRS = []
+PRIORITY_USDC_PAIRS = []
+
+try:
+    # Ajouter le répertoire actuel au path si nécessaire
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    if current_dir not in sys.path:
+        sys.path.insert(0, current_dir)
+    
+    from config import BLACKLISTED_PAIRS, PRIORITY_USDC_PAIRS, APIConfig, TradingConfig
+    st.success("✅ Configuration chargée avec succès")
+except ImportError as e:
+    st.warning(f"⚠️ Importation partielle de la configuration: {str(e)}")
+    try:
+        # Essayer d'importer individuellement
+        from config import TradingConfig
+        st.info("✅ TradingConfig chargé")
+    except:
+        st.error("❌ TradingConfig non disponible")
+    
+    try:
+        from config import APIConfig
+        st.info("✅ APIConfig chargé")
+    except:
+        st.error("❌ APIConfig non disponible")
+    
+    try:
+        from config import BLACKLISTED_PAIRS
+        st.info("✅ BLACKLISTED_PAIRS chargé")
+    except:
+        BLACKLISTED_PAIRS = []
+        st.warning("⚠️ BLACKLISTED_PAIRS par défaut")
+    
+    try:
+        from config import PRIORITY_USDC_PAIRS
+        st.info("✅ PRIORITY_USDC_PAIRS chargé")
+    except:
+        PRIORITY_USDC_PAIRS = []
+        st.warning("⚠️ PRIORITY_USDC_PAIRS par défaut")
+
+except Exception as e:
+    st.error(f"❌ Erreur lors du chargement de la configuration: {str(e)}")
+    st.info("📝 Utilisation des valeurs par défaut")
 
 def init_firebase():
     """Initialise la connexion Firebase"""
@@ -438,67 +476,92 @@ def show_config():
     st.caption(f"🔄 Configuration chargée: {datetime.now().strftime('%H:%M:%S')}")
     
     if TradingConfig is None:
-        st.error("❌ Configuration non disponible - Vérifiez config.py")
+        st.error("❌ Configuration TradingConfig non disponible - Vérifiez config.py")
         return
     
-    config = TradingConfig()
-    
-    # === PARAMÈTRES DE CAPITAL ===
-    st.subheader("💰 Paramètres de Capital")
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.metric("🎯 Objectif Quotidien", f"{config.DAILY_TARGET_PERCENT}%")
-        st.metric("🛑 Stop Loss Quotidien", f"{config.DAILY_STOP_LOSS_PERCENT}%")
-        st.metric("💼 Taille Position Base", f"{config.BASE_POSITION_SIZE_PERCENT}%")
-        st.metric("💰 Position Min", f"{config.MIN_POSITION_SIZE_USDC} USDC")
-    
-    with col2:
-        st.metric("💰 Position Max", f"{config.MAX_POSITION_SIZE_USDC} USDC")
-        st.metric("📈 Positions Max", f"{config.MAX_OPEN_POSITIONS}")
-        st.metric("🔄 Trades/Paire Max", f"{config.MAX_TRADES_PER_PAIR}")
-        st.metric("📊 Exposition Max/Asset", f"{config.MAX_EXPOSURE_PER_ASSET_PERCENT}%")
-    
-    # === PARAMÈTRES DE TRADING ===
-    st.subheader("🎯 Paramètres de Trading")
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.metric("🔻 Stop Loss", f"{config.STOP_LOSS_PERCENT}%")
-        st.metric("🔺 Take Profit", f"{config.TAKE_PROFIT_PERCENT}%")
-        st.metric("📈 Trailing Activation", f"{config.TRAILING_ACTIVATION_PERCENT}%")
-        st.metric("📊 Trailing Step", f"{config.TRAILING_STEP_PERCENT}%")
-    
-    with col2:
-        st.metric("⏱️ Intervalle Min Trades", f"{config.MIN_TRADE_INTERVAL_SECONDS}s")
-        st.metric("⏰ Trades Max/Heure", f"{config.MAX_TRADES_PER_HOUR}")
-        st.metric("🔄 Scan Interval", f"{config.SCAN_INTERVAL}s")
-        st.metric("📊 Timeframe", config.TIMEFRAME)
-    
-    # === NOUVEAUX PARAMÈTRES OPTIMISÉS ===
-    st.subheader("🚀 Optimisations Récentes")
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.metric("💥 Pertes Consécutives Max", f"{config.MAX_CONSECUTIVE_LOSSES}")
-        st.metric("⏸️ Pause après Pertes", f"{config.CONSECUTIVE_LOSS_PAUSE_MINUTES} min")
-        breakout_status = "✅ Activé" if config.ENABLE_BREAKOUT_CONFIRMATION else "❌ Désactivé"
-        st.metric("🎯 Confirmation Cassure", breakout_status)
-        st.metric("📊 Seuil Cassure", f"{config.BREAKOUT_CONFIRMATION_PERCENT}%")
-    
-    with col2:
-        consecutive_protection = "✅ Activé" if config.ENABLE_CONSECUTIVE_LOSS_PROTECTION else "❌ Désactivé"
-        st.metric("🛡️ Protection Pertes", consecutive_protection)
-        auto_resume = "✅ Activé" if config.AUTO_RESUME_AFTER_PAUSE else "❌ Désactivé"
-        st.metric("🔄 Reprise Auto", auto_resume)
-        st.metric("💹 Volume Min", f"{config.MIN_VOLUME_USDC:,.0f}")
-        st.metric("📈 Spread Max", f"{config.MAX_SPREAD_PERCENT}%")
+    try:
+        config = TradingConfig()
+        
+        # === PARAMÈTRES DE CAPITAL ===
+        st.subheader("💰 Paramètres de Capital")
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.metric("🎯 Objectif Quotidien", f"{config.DAILY_TARGET_PERCENT}%")
+            st.metric("🛑 Stop Loss Quotidien", f"{config.DAILY_STOP_LOSS_PERCENT}%")
+            st.metric("💼 Taille Position Base", f"{config.BASE_POSITION_SIZE_PERCENT}%")
+            st.metric("💰 Position Min", f"{config.MIN_POSITION_SIZE_USDC} USDC")
+        
+        with col2:
+            st.metric("💰 Position Max", f"{config.MAX_POSITION_SIZE_USDC} USDC")
+            st.metric("📈 Positions Max", f"{config.MAX_OPEN_POSITIONS}")
+            st.metric("🔄 Trades/Paire Max", f"{config.MAX_TRADES_PER_PAIR}")
+            st.metric("📊 Exposition Max/Asset", f"{config.MAX_EXPOSURE_PER_ASSET_PERCENT}%")
+        
+        # === PARAMÈTRES DE TRADING ===
+        st.subheader("🎯 Paramètres de Trading")
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.metric("🔻 Stop Loss", f"{config.STOP_LOSS_PERCENT}%")
+            st.metric("🔺 Take Profit", f"{config.TAKE_PROFIT_PERCENT}%")
+            st.metric("📈 Trailing Activation", f"{config.TRAILING_ACTIVATION_PERCENT}%")
+            st.metric("📊 Trailing Step", f"{config.TRAILING_STEP_PERCENT}%")
+        
+        with col2:
+            st.metric("⏱️ Intervalle Min Trades", f"{config.MIN_TRADE_INTERVAL_SECONDS}s")
+            st.metric("⏰ Trades Max/Heure", f"{config.MAX_TRADES_PER_HOUR}")
+            st.metric("🔄 Scan Interval", f"{config.SCAN_INTERVAL}s")
+            st.metric("📊 Timeframe", config.TIMEFRAME)
+        
+        # === NOUVEAUX PARAMÈTRES OPTIMISÉS ===
+        st.subheader("🚀 Optimisations Récentes")
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.metric("💥 Pertes Consécutives Max", f"{config.MAX_CONSECUTIVE_LOSSES}")
+            st.metric("⏸️ Pause après Pertes", f"{config.CONSECUTIVE_LOSS_PAUSE_MINUTES} min")
+            breakout_status = "✅ Activé" if config.ENABLE_BREAKOUT_CONFIRMATION else "❌ Désactivé"
+            st.metric("🎯 Confirmation Cassure", breakout_status)
+            st.metric("📊 Seuil Cassure", f"{config.BREAKOUT_CONFIRMATION_PERCENT}%")
+        
+        with col2:
+            consecutive_protection = "✅ Activé" if config.ENABLE_CONSECUTIVE_LOSS_PROTECTION else "❌ Désactivé"
+            st.metric("🛡️ Protection Pertes", consecutive_protection)
+            auto_resume = "✅ Activé" if config.AUTO_RESUME_AFTER_PAUSE else "❌ Désactivé"
+            st.metric("🔄 Reprise Auto", auto_resume)
+            st.metric("💹 Volume Min", f"{config.MIN_VOLUME_USDC:,.0f}")
+            st.metric("📈 Spread Max", f"{config.MAX_SPREAD_PERCENT}%")
+        
+        # === INDICATEURS TECHNIQUES ===
+        st.subheader("📊 Indicateurs Techniques")
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            st.write("**EMA**")
+            st.metric("EMA Rapide", f"{config.EMA_FAST_PERIOD}")
+            st.metric("EMA Lente", f"{config.EMA_SLOW_PERIOD}")
+        
+        with col2:
+            st.write("**RSI & MACD**")
+            st.metric("RSI Période", f"{config.RSI_PERIOD}")
+            st.metric("RSI Survente", f"{config.RSI_OVERSOLD_LEVEL}")
+            st.metric("MACD Rapide", f"{config.MACD_FAST_PERIOD}")
+        
+        with col3:
+            st.write("**Bollinger**")
+            st.metric("BB Période", f"{config.BOLLINGER_PERIOD}")
+            st.metric("BB Écart-Type", f"{config.BOLLINGER_STD_DEV}")
+            st.metric("Conditions Min", f"{config.MIN_SIGNAL_CONDITIONS}")
+        
+    except Exception as e:
+        st.error(f"❌ Erreur lors de l'accès à TradingConfig: {str(e)}")
     
     # === PAIRES BLACKLISTÉES ===
     st.subheader("⚫ Paires Blacklistées")
     if BLACKLISTED_PAIRS:
         st.write("Ces paires sont exclues du trading :")
-        cols = st.columns(len(BLACKLISTED_PAIRS))
+        cols = st.columns(min(4, len(BLACKLISTED_PAIRS)))
         for i, pair in enumerate(BLACKLISTED_PAIRS):
             with cols[i % len(cols)]:
                 st.error(f"❌ {pair}")
@@ -516,44 +579,28 @@ def show_config():
     else:
         st.info("Aucune paire prioritaire définie")
     
-    # === INDICATEURS TECHNIQUES ===
-    st.subheader("📊 Indicateurs Techniques")
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        st.write("**EMA**")
-        st.metric("EMA Rapide", f"{config.EMA_FAST_PERIOD}")
-        st.metric("EMA Lente", f"{config.EMA_SLOW_PERIOD}")
-    
-    with col2:
-        st.write("**RSI & MACD**")
-        st.metric("RSI Période", f"{config.RSI_PERIOD}")
-        st.metric("RSI Survente", f"{config.RSI_OVERSOLD_LEVEL}")
-        st.metric("MACD Rapide", f"{config.MACD_FAST_PERIOD}")
-    
-    with col3:
-        st.write("**Bollinger**")
-        st.metric("BB Période", f"{config.BOLLINGER_PERIOD}")
-        st.metric("BB Écart-Type", f"{config.BOLLINGER_STD_DEV}")
-        st.metric("Conditions Min", f"{config.MIN_SIGNAL_CONDITIONS}")
-    
     # === CONFIGURATION API ===
     if APIConfig:
         st.subheader("🔑 Configuration API")
-        api_config = APIConfig()
-        
-        col1, col2 = st.columns(2)
-        with col1:
-            testnet_status = "🧪 TESTNET" if api_config.TESTNET else "🔥 PRODUCTION"
-            st.metric("Mode", testnet_status)
-            binance_status = "✅ Configuré" if api_config.BINANCE_API_KEY else "❌ Manquant"
-            st.metric("Binance API", binance_status)
-        
-        with col2:
-            telegram_status = "✅ Configuré" if api_config.TELEGRAM_BOT_TOKEN else "❌ Manquant"
-            st.metric("Telegram", telegram_status)
-            sheets_status = "✅ Activé" if api_config.ENABLE_GOOGLE_SHEETS else "❌ Désactivé"
-            st.metric("Google Sheets", sheets_status)
+        try:
+            api_config = APIConfig()
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                testnet_status = "🧪 TESTNET" if api_config.TESTNET else "🔥 PRODUCTION"
+                st.metric("Mode", testnet_status)
+                binance_status = "✅ Configuré" if api_config.BINANCE_API_KEY else "❌ Manquant"
+                st.metric("Binance API", binance_status)
+            
+            with col2:
+                telegram_status = "✅ Configuré" if api_config.TELEGRAM_BOT_TOKEN else "❌ Manquant"
+                st.metric("Telegram", telegram_status)
+                sheets_status = "✅ Activé" if api_config.ENABLE_GOOGLE_SHEETS else "❌ Désactivé"
+                st.metric("Google Sheets", sheets_status)
+        except Exception as e:
+            st.error(f"❌ Erreur lors de l'accès à APIConfig: {str(e)}")
+    else:
+        st.warning("⚠️ Configuration API non disponible")
 
 def main():
     """Fonction principale du dashboard - CORRIGÉE"""
