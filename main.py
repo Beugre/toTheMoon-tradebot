@@ -733,10 +733,7 @@ class ScalpingBot:
             if final_notional < min_trade_size:
                 self.logger.warning(f"🚫 Trade {symbol} bloqué - Taille insuffisante: {final_notional:.2f}€ < {min_trade_size}€ (ANTI-FRAGMENTATION)")
                 return
-            
-            # Enregistrement du timestamp pour éviter la fragmentation
-            self.last_trade_time[symbol] = datetime.now()
-            
+                                  
             self.logger.info(f"✅ Trade {symbol} validé - Taille: {final_notional:.2f}€ (>{min_trade_size}€)")
             
             # Firebase logging pour trade validé
@@ -800,6 +797,9 @@ class ScalpingBot:
             # Ajout aux positions ouvertes avec ID unique
             trade_id = f"{symbol}_{trade.id}_{int(datetime.now().timestamp())}"
             self.open_positions[trade_id] = trade
+
+            # Enregistrement du timestamp pour éviter la fragmentation
+            self.last_trade_time[symbol] = datetime.now()
             
             # OPTIMISÉ: Mise à jour des compteurs de suivi
             self.trades_per_hour.append(datetime.now())  # Enregistrer le trade pour limite horaire
