@@ -18,6 +18,7 @@ import ccxt
 import gspread
 import numpy as np
 import pandas as pd
+import talib
 # Notifications & Logging
 import telegram
 from binance.client import Client
@@ -26,9 +27,6 @@ from binance.enums import (ORDER_TYPE_LIMIT, ORDER_TYPE_MARKET, SIDE_BUY, SIDE_S
 from binance.exceptions import BinanceAPIException, BinanceOrderException
 from oauth2client.service_account import ServiceAccountCredentials
 from telegram import Bot
-
-# Import des indicateurs manuels en remplacement de TA-Lib
-from utils.manual_indicators import ManualIndicators
 
 # Configuration
 from config import API_CONFIG, TradingConfig
@@ -454,12 +452,12 @@ class ScalpingBot:
             if len(klines) < period:
                 return 0.0
             
-            high = pd.Series([float(k[2]) for k in klines])
-            low = pd.Series([float(k[3]) for k in klines])
-            close = pd.Series([float(k[4]) for k in klines])
+            high = np.array([float(k[2]) for k in klines])
+            low = np.array([float(k[3]) for k in klines])
+            close = np.array([float(k[4]) for k in klines])
             
-            atr = ManualIndicators.ATR(high, low, close, timeperiod=period)
-            return atr.iloc[-1] if not np.isnan(atr.iloc[-1]) else 0.0
+            atr = talib.ATR(high, low, close, timeperiod=period) # type: ignore
+            return atr[-1] if not np.isnan(atr[-1]) else 0.0
             
         except Exception as e:
             self.logger.error(f"❌ Erreur calcul ATR pour {symbol}: {e}")
@@ -539,7 +537,9 @@ class ScalpingBot:
                 self.logger.info(f"⚠️ Signal {symbol} insuffisant: {len(analysis.signals)}/{self.config.MIN_SIGNAL_CONDITIONS} conditions (score: {analysis.total_score:.1f})")
                 self.logger.info(f"   🎯 Recommandation: {analysis.recommendation}")
                 for signal in analysis.signals[:3]:  # Max 3 signaux pour éviter spam
-                    self.logger.info(f"   - {signal.indicator}: {signal.description}")
+                    strength_emoji = {"WEAK": "🟡", "MODERATE": "🟠", "STRONG": "🔴", "VERY_STRONG": "🟣"}
+                    emoji = strength_emoji.get(signal.strength.name, "⚪")
+                    self.logger.info(f"   {emoji} {signal.indicator}: {signal.description}")
                     
                 # Firebase logging pour signal insuffisant
                 if self.firebase_logger:
@@ -858,6 +858,35 @@ class ScalpingBot:
         except Exception as e:
             self.logger.error(f"❌ Erreur lors de l'exécution du trade {symbol}: {e}")
 
+    def get_non_dust_trades_on_pair(self, symbol: str) -> int:
+        """Compte le nombre de trades non-miettes sur une paire"""
+        base_asset = symbol.replace('USDC', '')
+        non_dust_trades = 0
+        
+        for trade_id, trade in self.open_positions.items():
+            if trade.pair == symbol:
+                try:
+                    # Récupération du prix actuel pour calculer la valeur
+                    ticker = self.binance_client.get_symbol_ticker(symbol=symbol)
+                    current_price = float(ticker['price'])
+                    position_value = trade.size * current_price
+                    
+                    # Ne compter que si la valeur dépasse le seuil des miettes
+                    if position_value >= self.config.DUST_BALANCE_THRESHOLD_USDC:
+                        non_dust_trades += 1
+                        self.logger.debug(f"💎 Trade non-miette détecté {symbol}: {position_value:.2f}$ USDC")
+                    else:
+                        self.logger.debug(f"🧹 Trade miette ignoré {symbol}: {position_value:.2f}$ USDC < {self.config.DUST_BALANCE_THRESHOLD_USDC}$")
+                        
+                except Exception as e:
+                    # Fallback sur le prix d'entrée en cas d'erreur
+                    position_value = trade.size * trade.entry_price
+                    if position_value >= self.config.DUST_BALANCE_THRESHOLD_USDC:
+                        non_dust_trades += 1
+                    self.logger.debug(f"⚠️ Erreur calcul valeur trade {symbol}, fallback: {position_value:.2f}$ USDC")
+        
+        return non_dust_trades
+
     def can_open_position(self, symbol: str) -> bool:
         """Vérifie si on peut ouvrir une position"""
         # Vérification nombre de positions
@@ -865,10 +894,10 @@ class ScalpingBot:
             self.logger.debug(f"❌ Limite max positions atteinte: {len(self.open_positions)}")
             return False
         
-        # Vérification position déjà ouverte sur la paire
-        trades_on_pair = [trade for trade_id, trade in self.open_positions.items() if trade.pair == symbol]
-        if len(trades_on_pair) >= self.config.MAX_TRADES_PER_PAIR:
-            self.logger.debug(f"❌ Limite trades par paire atteinte: {len(trades_on_pair)}/{self.config.MAX_TRADES_PER_PAIR}")
+        # Vérification position déjà ouverte sur la paire (ignorant les miettes)
+        non_dust_trades_on_pair = self.get_non_dust_trades_on_pair(symbol)
+        if non_dust_trades_on_pair >= self.config.MAX_TRADES_PER_PAIR:
+            self.logger.debug(f"❌ Limite trades non-miettes par paire atteinte: {non_dust_trades_on_pair}/{self.config.MAX_TRADES_PER_PAIR}")
             return False
         
         # Vérification capital USDC disponible (pas le total avec crypto!)
@@ -895,8 +924,9 @@ class ScalpingBot:
         return True
     
     def get_asset_exposure(self, base_asset: str) -> float:
-        """Calcule l'exposition actuelle sur un asset de base (positions ouvertes + soldes existants)"""
+        """Calcule l'exposition actuelle sur un asset de base (positions ouvertes + soldes existants NON TRACÉS)"""
         total_exposure = 0.0
+        tracked_assets = 0
         
         # 1. Exposition des positions ouvertes tracées par le bot
         for trade_id, trade in self.open_positions.items():
@@ -906,28 +936,36 @@ class ScalpingBot:
                     current_price = float(ticker['price'])
                     position_value = trade.size * current_price
                     total_exposure += position_value
+                    tracked_assets += trade.size
+                    self.logger.debug(f"🎯 Position tracée {base_asset}: {trade.size:.8f} = {position_value:.2f} USDC")
                 except Exception as e:
                     self.logger.error(f"❌ Erreur calcul exposition position {trade.pair}: {e}")
                     # Fallback sur le prix d'entrée
                     position_value = trade.size * trade.entry_price
                     total_exposure += position_value
+                    tracked_assets += trade.size
         
-        # 2. Exposition des soldes crypto existants (CRITIQUE!)
+        # 2. Exposition des soldes crypto existants NON TRACÉS (pour éviter double comptage)
         try:
             existing_balance = self.get_asset_balance(base_asset)
             if existing_balance > 0.00001:  # Seuil technique pour éviter erreurs
-                symbol = base_asset + 'USDC'
-                ticker = self.binance_client.get_symbol_ticker(symbol=symbol)
-                current_price = float(ticker['price'])
-                existing_value = existing_balance * current_price
+                # Calculer le solde NON TRACÉ (solde total - soldes des positions ouvertes)
+                untracked_balance = existing_balance - tracked_assets
                 
-                # 🧹 GESTION INTELLIGENTE DES MIETTES
-                if existing_value < self.config.DUST_BALANCE_THRESHOLD_USDC:
-                    self.logger.info(f"🧹 Miettes détectées {base_asset}: {existing_balance:.8f} ({existing_value:.2f}$ < {self.config.DUST_BALANCE_THRESHOLD_USDC}$) - Ignorées pour exposition")
-                    # Les miettes ne comptent pas dans l'exposition pour bloquer les trades
+                if untracked_balance > 0.00001:  # Il y a un solde non tracé significatif
+                    symbol = base_asset + 'USDC'
+                    ticker = self.binance_client.get_symbol_ticker(symbol=symbol)
+                    current_price = float(ticker['price'])
+                    untracked_value = untracked_balance * current_price
+                    
+                    # 🧹 GESTION INTELLIGENTE DES MIETTES pour le solde NON TRACÉ
+                    if untracked_value < self.config.DUST_BALANCE_THRESHOLD_USDC:
+                        self.logger.info(f"🧹 Miettes non-tracées détectées {base_asset}: {untracked_balance:.8f} ({untracked_value:.2f}$ < {self.config.DUST_BALANCE_THRESHOLD_USDC}$) - Ignorées pour exposition")
+                    else:
+                        total_exposure += untracked_value
+                        self.logger.debug(f"💎 Exposition {base_asset}: Positions tracées: {total_exposure - untracked_value:.2f} USDC + Solde non-tracé: {untracked_value:.2f} USDC = Total: {total_exposure:.2f} USDC")
                 else:
-                    total_exposure += existing_value
-                    self.logger.debug(f"💎 Exposition {base_asset}: Positions ouvertes: {total_exposure - existing_value:.2f} USDC + Solde existant: {existing_value:.2f} USDC = Total: {total_exposure:.2f} USDC")
+                    self.logger.debug(f"✅ Exposition {base_asset}: Tout le solde ({existing_balance:.8f}) est tracé par les positions ouvertes ({tracked_assets:.8f})")
                 
         except Exception as e:
             self.logger.error(f"❌ Erreur calcul exposition solde existant {base_asset}: {e}")
@@ -1863,28 +1901,34 @@ class ScalpingBot:
             return 0.0
 
     def count_trades_per_pair(self, symbol: str) -> int:
-        """Compte le nombre de trades ouverts pour une paire - VÉRIFICATION RENFORCÉE"""
-        # Comptage en mémoire par symbole
-        memory_count = len([trade for trade_id, trade in self.open_positions.items() 
-                           if trade.pair == symbol])
+        """Compte le nombre de trades ouverts NON-MIETTES pour une paire - VÉRIFICATION RENFORCÉE"""
+        # Comptage en mémoire par symbole MAIS en ignorant les miettes
+        non_dust_trades = self.get_non_dust_trades_on_pair(symbol)
         
         # Vérification supplémentaire via solde Binance
         try:
             base_asset = symbol.replace('USDC', '')
             binance_balance = self.get_asset_balance(base_asset)
             
-            # Si on a un solde significatif mais pas de position en mémoire = incohérence
-            if binance_balance > 0.001 and memory_count == 0:
-                self.logger.warning(f"⚠️ Incohérence détectée: {base_asset} balance={binance_balance:.6f} mais 0 positions en mémoire")
+            # Calculer la valeur du solde en USDC
+            ticker = self.binance_client.get_symbol_ticker(symbol=symbol)
+            current_price = float(ticker['price'])
+            balance_value_usdc = binance_balance * current_price
+            
+            # Si on a un solde significatif (non-miette) mais pas de position non-miette en mémoire = incohérence
+            if balance_value_usdc >= self.config.DUST_BALANCE_THRESHOLD_USDC and non_dust_trades == 0:
+                self.logger.warning(f"⚠️ Incohérence détectée: {base_asset} balance={binance_balance:.6f} ({balance_value_usdc:.2f}$ USDC) mais 0 positions non-miettes en mémoire")
                 # Considérer qu'on a déjà une position pour éviter la surexposition
                 return 1
+            elif balance_value_usdc < self.config.DUST_BALANCE_THRESHOLD_USDC:
+                self.logger.debug(f"🧹 Solde miette détecté {base_asset}: {balance_value_usdc:.2f}$ < {self.config.DUST_BALANCE_THRESHOLD_USDC}$ - Non compté dans limite")
             
-            return memory_count
+            return non_dust_trades
             
         except Exception as e:
             self.logger.error(f"❌ Erreur vérification solde {symbol}: {e}")
-            # En cas d'erreur, on est conservateur et on suppose qu'on a déjà des positions
-            return max(memory_count, 1)  # Au minimum 1 pour éviter le sur-trading
+            # En cas d'erreur, utiliser le comptage des trades non-miettes en mémoire
+            return non_dust_trades
 
     def can_open_position_enhanced(self, symbol: str, volatility: float) -> tuple[bool, str]:
         """Vérifie si on peut ouvrir une position selon les nouvelles règles"""
@@ -1947,6 +1991,11 @@ class ScalpingBot:
     async def check_momentum_exit(self, trade: Trade, current_price: float, pnl_percent: float) -> tuple[bool, str]:
         """Vérifie si on doit sortir pour faiblesse du momentum"""
         try:
+            # Vérifier durée minimale avant sortie momentum
+            duration_minutes = (datetime.now() - trade.timestamp).total_seconds() / 60
+            if duration_minutes < self.config.MOMENTUM_MIN_DURATION_MINUTES:
+                return False, ""  # Trop tôt pour sortie momentum
+            
             # Vérifier si P&L dans la zone de momentum faible
             min_range, max_range = self.config.MOMENTUM_PNL_RANGE
             if not (min_range <= pnl_percent <= max_range):

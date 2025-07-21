@@ -1,0 +1,20 @@
+[Unit]
+Description=ToTheMoon Trading Bot
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/toTheMoon_tradebot
+Environment=CONDA_DEFAULT_ENV=trading
+Environment=CONDA_PREFIX=/opt/miniconda/envs/trading
+Environment=CONDA_PROMPT_MODIFIER=(trading)
+Environment=PATH=/opt/miniconda/envs/trading/bin:/opt/miniconda/condabin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=LD_LIBRARY_PATH=/opt/miniconda/envs/trading/lib
+ExecStartPre=/bin/bash -c 'source /opt/miniconda/etc/profile.d/conda.sh && conda activate trading'
+ExecStart=/opt/miniconda/envs/trading/bin/python run.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

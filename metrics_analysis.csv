@@ -1,0 +1,51 @@
+timestamp,metric_type,pair,value,additional_info,id
+2025-07-21T11:46:55.594052,capital_change,SUIUSDC,-2.052680401091493,"{'position_size': 2838.39592924935, 'action': 'trade_open', 'capital_total': 22706.607351379855}",ZiaLYnodnbkx94ltMH08
+2025-07-21T11:44:48.298579,daily_trades,,6.0,,OYwzPzMkMFRkrJy06BsV
+2025-07-21T11:44:48.298500,open_positions,,0.0,,eyN9fD6rCEQpCHWPDaUT
+2025-07-21T11:44:48.298456,daily_pnl,,-32.903221999999666,,ukDksqwKlauR92RD3dJ3
+2025-07-21T11:44:48.298361,total_capital,,22711.322750633102,,3X3UzHA11mW2pSePvjKU
+2025-07-21T11:41:20.588587,capital_change,ADAUSDC,-6.139989781098848,"{'position_size': 2840.5090845647815, 'action': 'trade_open', 'capital_total': 22714.0189576663}",Letb1z2oFzjLIQEoYhsm
+2025-07-21T11:38:36.896530,capital_change,SUIUSDC,-3.0786448992475925,"{'position_size': 2843.3995908860497, 'action': 'trade_open', 'capital_total': 22746.54810781945}",R8KIzw3VMRP21wXFfmnM
+2025-07-21T11:32:57.086765,daily_trades,,1.0,,i7VGFwTsfA7k76E9GuRg
+2025-07-21T11:32:57.086696,open_positions,,3.0,,b4Z8JWDuIp9zBjAsKywQ
+2025-07-21T11:32:57.086583,daily_pnl,,-2.3069199999999785,,AsxaiFEStg9JbHLvaGdK
+2025-07-21T11:32:57.086471,total_capital,,22797.1783689131,,N6c6OBY0C4w7drtyJER2
+2025-07-21T11:28:47.373754,capital_change,BTCUSDC,-2.079314793150843,"{'position_size': 5693.397309371237, 'action': 'trade_open', 'capital_total': 22775.1798686117}",WKcqLRh97T6xjsXocp4W
+2025-07-21T11:27:09.472939,capital_change,ETHUSDC,-7.937143021696102,"{'position_size': 5699.172331494912, 'action': 'trade_open', 'capital_total': 22786.624642680454}",nOVAQSsGFqLABRO8j0Em
+2025-07-21T11:24:53.937360,capital_change,SUIUSDC,-2.45555440409953,"{'position_size': 2851.5501450781308, 'action': 'trade_open', 'capital_total': 22810.203161805603}",1Fy3vFyMUcp04xr41V9K
+2025-07-21T11:23:33.721739,capital_change,DOGEUSDC,-5.308003170495795,"{'position_size': 5700.5594935531, 'action': 'trade_open', 'capital_total': 22796.538890881053}",P6nqlU6YMJTxXHNvWB6d
+2025-07-21T11:08:04.134286,capital_change,SUIUSDC,-2.8493121480532864,"{'position_size': 2857.3210916854064, 'action': 'trade_open', 'capital_total': 22855.949632367}",kBgDRxcclxmlJsUyfDR2
+2025-07-21T11:06:24.954543,capital_change,ADAUSDC,-1.5203351669988479,"{'position_size': 2855.783766155256, 'action': 'trade_open', 'capital_total': 22845.12902610925}",pNBKJ1fEwn0wHHQwiSGP
+2025-07-21T11:03:25.967359,capital_change,ADAUSDC,-2.867333183854498,"{'position_size': 2856.509298312625, 'action': 'trade_open', 'capital_total': 22848.655802178197}",oCm0IJBvF5pFpKmmcLqg
+2025-07-21T11:01:35.003803,capital_change,XRPUSDC,-2.1132768058014335,"{'position_size': 2857.4171246688124, 'action': 'trade_open', 'capital_total': 22857.22344168895}",7pMK6UGiDy028XZ21nwb
+2025-07-21T10:58:57.944083,capital_change,SOLUSDC,-2.563643299494288,"{'position_size': 2856.854537120399, 'action': 'trade_open', 'capital_total': 22852.272351159307}",GjUGcQv8DJDNT1Uhjsqu
+2025-07-21T10:56:02.348777,capital_change,XRPUSDC,-4.003569697302737,"{'position_size': 2857.7400561677377, 'action': 'trade_open', 'capital_total': 22857.91717000095}",6mFOMg1jU63VI8NqBkKA
+2025-07-21T10:53:11.775616,capital_change,SUIUSDC,-3.037717870247434,"{'position_size': 2858.6500388792247, 'action': 'trade_open', 'capital_total': 22865.1068744328}",zr2Qy73wlqNrOF9XEaQa
+2025-07-21T10:52:44.721719,capital_change,SOLUSDC,-2.5680024503017194,"{'position_size': 2859.254861526894, 'action': 'trade_open', 'capital_total': 22871.46770530745}",eGnS3lqtuqw1sSqC2YTK
+2025-07-21T10:50:58.549916,capital_change,SUIUSDC,-3.840406169405469,"{'position_size': 2860.11580304555, 'action': 'trade_open', 'capital_total': 22876.846099679147}",fKrih1hsVm2lHXZDe7Rj
+2025-07-21T10:50:29.904903,capital_change,XRPUSDC,-2.555403787049727,"{'position_size': 2860.3059455632556, 'action': 'trade_open', 'capital_total': 22879.883097703503}",xOU5I1dz4YczDnujAmsO
+2025-07-21T10:41:29.616960,daily_trades,,2.0,,5flKvZRKR5deUGa1ZBkv
+2025-07-21T10:41:29.616928,open_positions,,0.0,,cIatfgYxEym5zUp2pDC6
+2025-07-21T10:41:29.616890,daily_pnl,,-2.9278800000000307,,EdTLsFyK0l852NKv33Py
+2025-07-21T10:41:29.616712,total_capital,,22882.45914061935,,znVjMt8WOXUjvBCftoBU
+2025-07-21T10:32:02.226762,capital_change,ADAUSDC,-2.7184265898977173,"{'position_size': 2861.7699013804936, 'action': 'trade_open', 'capital_total': 22891.439411514748}",KyCoeTiRVc62djRzzxjg
+2025-07-21T10:31:39.443452,capital_change,SUIUSDC,-2.6523402906423144,"{'position_size': 2862.047613252568, 'action': 'trade_open', 'capital_total': 22893.726354460003}",KBh7QAo6hvnQUHYWtXAZ
+2025-07-21T10:22:21.292038,daily_trades,,0.0,,iH8xuMjojlrfLOXFreMx
+2025-07-21T10:22:21.291995,open_positions,,0.0,,CGdSbzLJ7hO4im40rR8O
+2025-07-21T10:22:21.291940,daily_pnl,,0.0,,nZbbyW3likEtOi6G89Vt
+2025-07-21T10:22:21.291801,total_capital,,22896.356100401397,,XUto1rdJ5bIQYufCbsMo
+2025-07-21T10:05:34.167163,daily_trades,,0.0,,4Z7RPyP4XzfqzwdT1U1e
+2025-07-21T10:05:34.167128,open_positions,,0.0,,aI5fMzckfFJ39ymgOWcf
+2025-07-21T10:05:34.167089,daily_pnl,,0.0,,ThNVQypCmCHNIgZzo4TE
+2025-07-21T10:05:34.166983,total_capital,,22896.333325687752,,oQ6JgLfq4k8SBg7NB1rN
+2025-07-21T10:05:10.771474,daily_trades,,0.0,,utiO92POZBV6P7sLeUGp
+2025-07-21T10:05:10.771455,open_positions,,0.0,,vu3WRwAiEnc3nBI0gdBm
+2025-07-21T10:05:10.771429,daily_pnl,,0.0,,DRjD8Pm6mCQmqNR8vAZ7
+2025-07-21T10:05:10.771343,total_capital,,22896.3325047215,,JsHPwPo1ovQlqPzkaPig
+2025-07-21T09:57:35.850370,daily_trades,,0.0,,THOzAHKqyzkMlQG2FfgM
+2025-07-21T09:57:35.850335,open_positions,,0.0,,6AUfT82bF2tvbDLpsgsG
+2025-07-21T09:57:35.850299,daily_pnl,,0.0,,mI9eLeT60qZadMLhtftX
+2025-07-21T09:57:35.850222,total_capital,,22896.32376634595,,wTcFNIdn0pyh6uSBSPGI
+2025-07-21T09:57:14.681197,daily_trades,,0.0,,C2wAYOJ8K5Xktzctkkwd
+2025-07-21T09:57:14.681179,open_positions,,0.0,,fjy4zrBNMx7zglRRatef
+2025-07-21T09:57:14.681155,daily_pnl,,0.0,,xDmIH95dpcxhoU6Jhua4

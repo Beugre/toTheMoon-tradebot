@@ -26,7 +26,7 @@ class TradingConfig:
     # Paramètres de position - Anti-fragmentation
     MAX_OPEN_POSITIONS: int = 3  # Moins de positions mais plus grosses
     MAX_TRADES_PER_PAIR: int = 1  # UN SEUL trade par paire max
-    MAX_EXPOSURE_PER_ASSET_PERCENT: float = 20.0  # Exposition max par crypto (20% du capital)
+    MAX_EXPOSURE_PER_ASSET_PERCENT: float = 30.0  # Exposition max par crypto (30% pour haute liquidité)
     STOP_LOSS_PERCENT: float = 0.25  # SL plus serré pour limiter pertes
     TAKE_PROFIT_PERCENT: float = 1.2  # TP optimisé pour USDC haute liquidité
     TRAILING_ACTIVATION_PERCENT: float = 0.1  # Activation trailing dès 0.1%
@@ -104,9 +104,10 @@ class TradingConfig:
     
     # Paramètres de sortie momentum faible
     ENABLE_MOMENTUM_EXIT: bool = True  # Activer sortie momentum faible
-    MOMENTUM_PNL_RANGE: tuple = (-0.2, 0.2)  # Range P&L pour sortie momentum
-    MOMENTUM_RSI_THRESHOLD: int = 45  # RSI max pour sortie momentum
+    MOMENTUM_PNL_RANGE: tuple = (-0.1, 0.1)  # Range P&L pour sortie momentum (plus restrictif)
+    MOMENTUM_RSI_THRESHOLD: int = 35  # RSI max pour sortie momentum (vraiment faible)
     MOMENTUM_MACD_NEGATIVE: bool = True  # MACD histogram négatif requis
+    MOMENTUM_MIN_DURATION_MINUTES: int = 3  # Durée minimale avant sortie momentum (3 min)
 
 @dataclass
 class APIConfig:
