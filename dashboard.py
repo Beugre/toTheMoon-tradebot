@@ -66,6 +66,9 @@ def show_overview(db):
     """Page Vue d'ensemble"""
     st.header("🎯 Vue d'Ensemble")
     
+    # Indicateur de refresh temps réel
+    st.caption(f"🔄 Données mises à jour: {datetime.now().strftime('%H:%M:%S')}")
+    
     # Récupération des données
     trades = get_real_time_data(db, "trades", 10)
     metrics = get_real_time_data(db, "metrics", 50)
@@ -106,6 +109,9 @@ def show_performance(db):
     """Page Performance avec analyse réelle des P&L"""
     st.header("📈 Performance Trading - Analyse Réelle")
     
+    # Indicateur de refresh temps réel
+    st.caption(f"🔄 Données mises à jour: {datetime.now().strftime('%H:%M:%S')}")
+    
     # Récupération des trades (30 derniers pour analyse approfondie)
     trades = get_real_time_data(db, "trades", 30)
     
@@ -134,9 +140,11 @@ def show_performance(db):
         win_rate = (profitable / len(df_pnl)) * 100 if len(df_pnl) > 0 else 0
         avg_pnl = df_pnl['real_pnl'].mean()
         
-        # Capital évolution
-        capital_start = df_trades['capital_before'].iloc[0] if len(df_trades) > 0 else 0
-        capital_current = df_trades['capital_after'].iloc[-1] if len(df_trades) > 0 else 0
+        # Capital évolution (corriger l'ordre)
+        # Le premier élément (index 0) est le plus récent car données triées DESCENDING dans Firebase
+        # Le dernier élément (index -1) est le plus ancien après tri ascendant
+        capital_current = df_trades['capital_after'].iloc[0] if len(df_trades) > 0 else 0  # Plus récent
+        capital_start = df_trades['capital_before'].iloc[-1] if len(df_trades) > 0 else 0   # Plus ancien
         
         col1, col2, col3, col4, col5 = st.columns(5)
         
@@ -279,6 +287,9 @@ def show_trades(db):
     """Page Trades détaillés"""
     st.header("💹 Trades Détaillés")
     
+    # Indicateur de refresh temps réel
+    st.caption(f"🔄 Données mises à jour: {datetime.now().strftime('%H:%M:%S')}")
+    
     trades = get_real_time_data(db, "trades", 50)
     
     if trades:
@@ -327,6 +338,9 @@ def show_trades(db):
 def show_logs(db):
     """Page Logs temps réel"""
     st.header("🔔 Logs Temps Réel")
+    
+    # Indicateur de refresh temps réel
+    st.caption(f"🔄 Données mises à jour: {datetime.now().strftime('%H:%M:%S')}")
     
     logs = get_real_time_data(db, "bot_logs", 100)
     
@@ -393,41 +407,45 @@ def main():
     st.sidebar.success("🔥 Firebase: Connecté")
     st.sidebar.info(f"🕐 Dernière MAJ: {datetime.now().strftime('%H:%M:%S')}")
     
-    # 🔄 AUTO-REFRESH GLOBAL (nouveau)
+    # 🔄 AUTO-REFRESH GLOBAL (corrigé)
     auto_refresh = st.sidebar.checkbox("🔄 Auto-refresh (10s)", value=True, key="global_refresh")
     
     # Bouton de rafraîchissement manuel
     if st.sidebar.button("🔄 Actualiser"):
         st.rerun()
     
-    # Container principal pour l'auto-refresh
+    # Initialiser session state pour auto-refresh
+    if 'last_refresh' not in st.session_state:
+        st.session_state.last_refresh = datetime.now()
+    
+    # Auto-refresh logic (sans time.sleep qui bloque l'UI)
     if auto_refresh:
-        # Placeholder pour l'auto-refresh
-        placeholder = st.empty()
-        with placeholder.container():
-            # Navigation vers les pages
-            if page == "🎯 Vue d'ensemble":
-                show_overview(db)
-            elif page == "📈 Performance":
-                show_performance(db)
-            elif page == "💹 Trades":
-                show_trades(db)
-            elif page == "🔔 Logs":
-                show_logs(db)
+        now = datetime.now()
+        time_since_refresh = (now - st.session_state.last_refresh).total_seconds()
         
-        # Auto-refresh toutes les 10 secondes
-        time.sleep(10)
-        st.rerun()
-    else:
-        # Mode normal (sans auto-refresh)
-        if page == "🎯 Vue d'ensemble":
-            show_overview(db)
-        elif page == "📈 Performance":
-            show_performance(db)
-        elif page == "💹 Trades":
-            show_trades(db)
-        elif page == "🔔 Logs":
-            show_logs(db)
+        if time_since_refresh >= 10:  # 10 secondes écoulées
+            st.session_state.last_refresh = now
+            st.rerun()
+    
+    # Navigation vers les pages (toujours afficher le contenu)
+    if page == "🎯 Vue d'ensemble":
+        show_overview(db)
+    elif page == "📈 Performance":
+        show_performance(db)
+    elif page == "💹 Trades":
+        show_trades(db)
+    elif page == "🔔 Logs":
+        show_logs(db)
+    
+    # JavaScript auto-refresh pour forcer le refresh côté client
+    if auto_refresh:
+        st.markdown("""
+        <script>
+        setTimeout(function(){
+            window.location.reload();
+        }, 10000);
+        </script>
+        """, unsafe_allow_html=True)
 
 if __name__ == "__main__":
     main()
