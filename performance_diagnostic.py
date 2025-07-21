@@ -25,7 +25,7 @@ def get_recent_logs(db, limit=200):
     print("📋 Récupération des logs récents...")
     
     logs_ref = db.collection('bot_logs')
-    docs = logs_ref.order_by('timestamp', direction=firestore.Query.DESCENDING).limit(limit).stream()
+    docs = logs_ref.order_by('timestamp', direction=firestore.Query.DESCENDING).limit(limit).stream() # type: ignore
     
     logs = []
     for doc in docs:
