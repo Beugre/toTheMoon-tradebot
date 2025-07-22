@@ -465,9 +465,24 @@ def show_logs(db):
     logs = get_real_time_data(db, "bot_logs", 100)
     
     if logs:
-        df = pd.DataFrame(logs)
-        df['timestamp'] = pd.to_datetime(df['timestamp'])
-        df = df.sort_values('timestamp', ascending=False)
+        try:
+            df = pd.DataFrame(logs)
+            
+            # Gestion robuste des timestamps
+            if 'timestamp' in df.columns:
+                try:
+                    # Convertir les timestamps avec gestion d'erreur
+                    df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce')
+                    # Supprimer les lignes avec des timestamps invalides
+                    df = df.dropna(subset=['timestamp'])
+                    if len(df) > 0:
+                        df = df.sort_values('timestamp', ascending=False)
+                except Exception as e:
+                    st.warning(f"⚠️ Problème avec les timestamps: {str(e)}")
+                    # Fallback: utiliser l'ordre original
+                    pass
+            else:
+                st.warning("⚠️ Colonne 'timestamp' manquante dans les logs")
         
         # Filtres
         col1, col2 = st.columns(2)
@@ -479,24 +494,35 @@ def show_logs(db):
         # Application des filtres
         df_filtered = df.copy()
         
-        if log_level != "ALL":
+        if log_level != "ALL" and 'level' in df_filtered.columns:
             df_filtered = df_filtered[df_filtered['level'] == log_level]
         
-        if search_term:
+        if search_term and 'message' in df_filtered.columns:
             df_filtered = df_filtered[df_filtered['message'].str.contains(search_term, case=False, na=False)]
         
         # Affichage
         for _, log in df_filtered.head(50).iterrows():
-            timestamp = log['timestamp'].strftime("%H:%M:%S")
-            level = log.get('level', 'INFO')
-            message = log.get('message', 'N/A')
-            
-            if level == "ERROR":
-                st.error(f"[{timestamp}] {message}")
-            elif level == "WARNING":
-                st.warning(f"[{timestamp}] {message}")
-            else:
-                st.info(f"[{timestamp}] {message}")
+            try:
+                if 'timestamp' in log and pd.notna(log['timestamp']):
+                    timestamp = log['timestamp'].strftime("%H:%M:%S")
+                else:
+                    timestamp = "N/A"
+                level = log.get('level', 'INFO')
+                message = log.get('message', 'N/A')
+                
+                if level == "ERROR":
+                    st.error(f"[{timestamp}] {message}")
+                elif level == "WARNING":
+                    st.warning(f"[{timestamp}] {message}")
+                else:
+                    st.info(f"[{timestamp}] {message}")
+            except Exception as e:
+                st.error(f"Erreur affichage log: {str(e)}")
+        
+        except Exception as e:
+            st.error(f"❌ Erreur traitement logs: {str(e)}")
+            st.info("📝 Affichage des données brutes:")
+            st.json(logs[:3] if len(logs) > 3 else logs)
     else:
         st.info("Aucun log disponible")
 
