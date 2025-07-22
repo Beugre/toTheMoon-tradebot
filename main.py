@@ -442,15 +442,39 @@ class ScalpingBot:
                         await asyncio.sleep(60)  # Vérifier toutes les minutes
                         continue
                     else:
-                        # Fin de pause
+                        # Fin de pause - RÉINITIALISER COMPLÈTEMENT
                         self.logger.info(f"✅ FIN DE PAUSE: Reprise du trading normal")
                         self.consecutive_loss_pause_until = None
                         
-                        # Notification Telegram de reprise
+                        # 🔥 RÉINITIALISATION COMPLÈTE DU COMPTEUR
+                        old_consecutive_losses = self.consecutive_losses
+                        self.consecutive_losses = 0
+                        self.last_trade_results = []  # Reset de l'historique des résultats
+                        
+                        self.logger.info(f"🔄 COMPTEURS RÉINITIALISÉS:")
+                        self.logger.info(f"   Pertes consécutives: {old_consecutive_losses} → {self.consecutive_losses}")
+                        self.logger.info(f"   Historique résultats: Reset complet")
+                        
+                        # Notification Telegram de reprise avec détails
                         message = f"✅ REPRISE DU TRADING\n"
                         message += f"Fin de la pause de sécurité\n"
+                        message += f"Compteurs réinitialisés: {old_consecutive_losses} → 0 pertes\n"
                         message += f"Le bot reprend ses activités normalement"
                         await self.telegram_notifier.send_message(message)
+                        
+                        # Firebase logging pour reprise
+                        if self.firebase_logger:
+                            self.firebase_logger.log_message(
+                                level="INFO",
+                                message=f"✅ REPRISE TRADING: Compteurs réinitialisés ({old_consecutive_losses} → 0)",
+                                module="risk_management",
+                                additional_data={
+                                    'old_consecutive_losses': old_consecutive_losses,
+                                    'new_consecutive_losses': 0,
+                                    'pause_completed': True,
+                                    'counters_reset': True
+                                }
+                            )
                 
                 # Affichage status horaires
                 hours_status = get_hours_status_message(self.config)
@@ -2395,9 +2419,18 @@ class ScalpingBot:
             if now < self.consecutive_loss_pause_until:
                 return False  # Encore en pause
             else:
-                # Fin de pause - reprendre le trading
+                # Fin de pause - RÉINITIALISATION COMPLÈTE
+                old_consecutive_losses = self.consecutive_losses
                 self.logger.info(f"✅ FIN DE PAUSE: Reprise du trading après pause de sécurité")
                 self.consecutive_loss_pause_until = None
+                
+                # 🔥 RÉINITIALISATION COMPLÈTE DU COMPTEUR
+                self.consecutive_losses = 0
+                self.last_trade_results = []  # Reset de l'historique des résultats
+                
+                self.logger.info(f"🔄 COMPTEURS RÉINITIALISÉS dans can_trade_after_consecutive_losses:")
+                self.logger.info(f"   Pertes consécutives: {old_consecutive_losses} → {self.consecutive_losses}")
+                
                 return True
         
         return self.consecutive_losses < self.config.MAX_CONSECUTIVE_LOSSES
