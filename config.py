@@ -173,14 +173,14 @@ BLACKLISTED_PAIRS = [
     "XRPUSDC",  # Mauvaise performance (-6.12 USDC)
     "DOGEUSDC", # Mauvaise performance (-5.31 USDC)
     "ADAUSDC",  # Mauvaise performance (-15.58 USDC)
-    "SUIUSDC"   # Mauvaise performance (-13.47 USDC)
+    "SUIUSDC",   # Mauvaise performance (-13.47 USDC)
+    "SOLUSDC",  # Mauvaise performance (-77 USDC)
 ]
 
 # Paires prioritaires USDC (haute liquidité) - OPTIMISÉES
 PRIORITY_USDC_PAIRS = [
     'BTCUSDC',   # 2B$ volume/jour - Meilleure performance
     'ETHUSDC',   # 1.5B$ volume/jour - Acceptable
-    'SOLUSDC',   # 800M$ volume/jour - Performance correcte
     'MATICUSDC', # 150M$ volume/jour
     'LTCUSDC',   # 150M$ volume/jour
     'LINKUSDC',  # 100M$ volume/jour
@@ -190,6 +190,7 @@ PRIORITY_USDC_PAIRS = [
     # 'DOGEUSDC',  # -5.31 USDC (1 trade) - BLACKLISTÉ
     # 'ADAUSDC',   # -15.58 USDC (4 trades) - BLACKLISTÉ
     # 'SUIUSDC',   # -13.47 USDC (5 trades) - BLACKLISTÉ
+    # 'SOLUSDC',   # - 77 USDC (3 trades) - BLACKLISTÉ
 ]
 
 # Configuration du logging
