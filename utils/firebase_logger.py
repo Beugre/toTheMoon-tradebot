@@ -389,6 +389,64 @@ class FirebaseLogger:
         
         self.metrics_queue.put(asdict(metric_entry))
 
+    def log_pair_scan_result(self, scan_data: Dict):
+        """Log les résultats de scan des paires dans une collection dédiée"""
+        if not FIREBASE_CONFIG.ENABLE_FIREBASE_LOGGING:
+            return
+
+        # Structure spécifique pour les résultats de scan
+        scan_result = {
+            "timestamp": datetime.now().isoformat(),
+            "session_id": self.session_id,
+            "pair": scan_data.get("pair", ""),
+            "decision": scan_data.get("final_decision", "UNKNOWN"),
+            "reason": scan_data.get("reason", ""),
+            "price": scan_data.get("price", 0),
+            "volume_24h": scan_data.get("volume_24h", 0),
+            "spread_pct": scan_data.get("spread_pct", 0),
+            "volatility_1h_pct": scan_data.get("volatility_1h_pct", 0),
+            "volatility_24h_pct": scan_data.get("volatility_24h_pct", 0),
+            "signal_score": scan_data.get("signal_score", 0),
+            "conditions": scan_data.get("conditions", {}),
+            "config_thresholds": {
+                "min_volume": scan_data.get("config_min_volume", 0),
+                "max_spread": scan_data.get("config_max_spread", 0),
+                "min_volatility_1h": scan_data.get("config_min_volatility_1h", 0),
+                "min_signal_conditions": scan_data.get("config_min_signal_conditions", 0)
+            }
+        }
+        
+        # Upload direct dans la collection dédiée (pas via queue pour la rapidité)
+        if self.firebase_initialized and self.firestore_db:
+            try:
+                self.firestore_db.collection("result_pair_scan").add(scan_result)
+            except Exception as e:
+                self.logger.error(f"❌ Erreur upload scan result: {e}")
+
+    def log_scan_summary(self, summary_data: Dict):
+        """Log le résumé global d'un scan de paires"""
+        if not FIREBASE_CONFIG.ENABLE_FIREBASE_LOGGING:
+            return
+
+        summary_result = {
+            "timestamp": datetime.now().isoformat(),
+            "session_id": self.session_id,
+            "scan_type": "SUMMARY",
+            "total_pairs": summary_data.get("total_pairs", 0),
+            "validated_pairs": summary_data.get("validated_pairs", 0),
+            "rejected_pairs": summary_data.get("rejected_pairs", 0),
+            "exclusion_stats": summary_data.get("exclusion_stats", {}),
+            "config_thresholds": summary_data.get("config_thresholds", {}),
+            "scan_duration_ms": summary_data.get("scan_duration_ms", 0)
+        }
+        
+        # Upload direct dans la collection dédiée
+        if self.firebase_initialized and self.firestore_db:
+            try:
+                self.firestore_db.collection("result_pair_scan").add(summary_result)
+            except Exception as e:
+                self.logger.error(f"❌ Erreur upload scan summary: {e}")
+
     # =================== MÉTHODES DE REQUÊTE ===================
 
     def get_recent_trades(self, limit: int = 50, pair: Optional[str] = None) -> List[Dict]:

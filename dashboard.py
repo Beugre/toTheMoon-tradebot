@@ -639,15 +639,16 @@ def show_analytics(db):
     st.header("📊 Analytics - Décisions de Trading")
     st.markdown("*Analyse temps réel des paires validées/rejetées pour optimisation des seuils*")
     
-    # Récupération des données de décisions
-    decisions_data = get_real_time_data(db, "logs", limit=1000)
+    # Récupération des données de décisions depuis la nouvelle collection
+    decisions_data = get_real_time_data(db, "result_pair_scan", limit=1000)
     
-    # Filtrer seulement les décisions de paires
-    pair_decisions = [d for d in decisions_data if d.get('module') == 'pair_scanner_decisions']
-    scan_summaries = [d for d in decisions_data if d.get('module') == 'pair_scanner_summary']
+    # Filtrer les données : décisions individuelles vs résumés
+    pair_decisions = [d for d in decisions_data if d.get('scan_type') != 'SUMMARY']
+    scan_summaries = [d for d in decisions_data if d.get('scan_type') == 'SUMMARY']
     
     if not pair_decisions:
         st.warning("⚠️ Aucune donnée de décision trouvée. Le bot doit scanner des paires pour générer des données.")
+        st.info("💡 Les données sont maintenant stockées dans la collection 'result_pair_scan' pour une meilleure organisation")
         return
     
     # Conversion en DataFrame
@@ -655,21 +656,9 @@ def show_analytics(db):
     df_decisions['timestamp'] = pd.to_datetime(df_decisions['timestamp'])
     df_decisions['timestamp_paris'] = df_decisions['timestamp'].apply(to_paris_time)
     
-    # Extraire les données détaillées
-    decisions_detail = []
-    for _, row in df_decisions.iterrows():
-        if 'additional_data' in row and row['additional_data']:
-            detail = row['additional_data']
-            detail['log_timestamp'] = row['timestamp_paris']
-            decisions_detail.append(detail)
-    
-    if not decisions_detail:
-        st.warning("⚠️ Aucune donnée détaillée disponible")
-        return
-    
-    df_detailed = pd.DataFrame(decisions_detail)
-    df_detailed['timestamp'] = pd.to_datetime(df_detailed['timestamp'])
-    df_detailed['timestamp_paris'] = df_detailed['timestamp'].apply(to_paris_time)
+    # Les données sont déjà structurées correctement dans la nouvelle collection
+    df_detailed = df_decisions.copy()
+    df_detailed['final_decision'] = df_detailed['decision']  # Normaliser le nom de colonne
     
     # Métriques globales
     col1, col2, col3, col4 = st.columns(4)
@@ -731,7 +720,7 @@ def show_analytics(db):
                     reasons.append('Volume insuffisant')
                 elif 'Spread >' in reason:
                     reasons.append('Spread trop élevé')
-                elif 'Volatility 1h <' in reason:
+                elif 'Volatility 1h <' in reason or 'Volatilité 1h <' in reason:
                     reasons.append('Volatilité 1h faible')
                 elif 'Signal score <' in reason:
                     reasons.append('Score signal insuffisant')

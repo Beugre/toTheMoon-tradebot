@@ -551,9 +551,25 @@ class ScalpingBot:
         try:
             self.logger.info("🔎 Scan des paires USDC en cours...")
             
-            # Récupération des tickers
-            tickers = self.binance_client.get_ticker()
-            usdc_pairs = [t for t in tickers if t['symbol'].endswith('USDC')]
+            # Récupération des tickers avec gestion d'erreur améliorée
+            try:
+                # Essayer d'abord get_ticker() standard
+                tickers = self.binance_client.get_ticker()
+                if not tickers:
+                    # Fallback sur 24hr ticker statistics
+                    tickers = self.binance_client.get_24hr_ticker()
+                
+                usdc_pairs = [t for t in tickers if t['symbol'].endswith('USDC')]
+                
+                if not usdc_pairs:
+                    self.logger.warning("⚠️ Aucune paire USDC trouvée")
+                    return []
+                    
+                self.logger.info(f"📊 {len(usdc_pairs)} paires USDC trouvées")
+                
+            except Exception as e:
+                self.logger.error(f"❌ Erreur récupération tickers: {e}")
+                return []
             
             pair_scores = []
             exclusion_stats = {
@@ -574,14 +590,32 @@ class ScalpingBot:
             detailed_decisions = []
             
             for ticker in usdc_pairs:
-                symbol = ticker['symbol']
-                current_price = float(ticker['price'])
-                volume_usdc = float(ticker['quoteVolume'])
-                bid = float(ticker['bidPrice'])
-                ask = float(ticker['askPrice'])
-                spread = (ask - bid) / bid * 100
-                price_change = abs(float(ticker['priceChangePercent']))
-                volatility_1h = self.calculate_volatility_1h(symbol)
+                try:
+                    symbol = ticker['symbol']
+                    
+                    # Gestion robuste des différentes clés de prix possibles
+                    current_price = None
+                    if 'lastPrice' in ticker:
+                        current_price = float(ticker['lastPrice'])
+                    elif 'price' in ticker:
+                        current_price = float(ticker['price'])
+                    elif 'close' in ticker:
+                        current_price = float(ticker['close'])
+                    else:
+                        self.logger.warning(f"⚠️ Prix non trouvé pour {symbol}, structure: {list(ticker.keys())}")
+                        continue
+                    
+                    # Gestion robuste des autres champs
+                    volume_usdc = float(ticker.get('quoteVolume', ticker.get('volume', 0)))
+                    bid = float(ticker.get('bidPrice', ticker.get('bid', current_price * 0.999)))
+                    ask = float(ticker.get('askPrice', ticker.get('ask', current_price * 1.001)))
+                    spread = (ask - bid) / bid * 100 if bid > 0 else 0
+                    price_change = abs(float(ticker.get('priceChangePercent', ticker.get('priceChange', 0))))
+                    volatility_1h = self.calculate_volatility_1h(symbol)
+                    
+                except Exception as e:
+                    self.logger.error(f"❌ Erreur parsing ticker {ticker.get('symbol', 'UNKNOWN')}: {e}")
+                    continue
                 
                 # 📊 Structure détaillée de la décision
                 decision = {
@@ -708,36 +742,38 @@ class ScalpingBot:
             # � LOGGING FIREBASE: Sauvegarder toutes les décisions détaillées
             if self.firebase_logger and detailed_decisions:
                 try:
+                    # Logger chaque décision individuelle dans la collection result_pair_scan
                     for decision in detailed_decisions:
-                        self.firebase_logger.log_message(
-                            level="INFO",
-                            message=f"PAIR_DECISION: {decision['pair']} - {decision['final_decision']}",
-                            module="pair_scanner_decisions",
-                            pair=decision['pair'],
-                            additional_data=decision
-                        )
+                        # Ajouter les seuils de configuration à chaque décision
+                        decision["config_min_volume"] = self.config.MIN_VOLUME_USDC
+                        decision["config_max_spread"] = self.config.MAX_SPREAD_PERCENT
+                        decision["config_min_volatility_1h"] = self.config.MIN_VOLATILITY_1H_PERCENT
+                        decision["config_min_signal_conditions"] = self.config.MIN_SIGNAL_CONDITIONS
+                        
+                        self.firebase_logger.log_pair_scan_result(decision)
                     
                     # Statistiques globales du scan
                     validated_count = sum(1 for d in detailed_decisions if d['final_decision'] == 'VALIDATED')
                     rejected_count = sum(1 for d in detailed_decisions if d['final_decision'] == 'REJECTED')
                     
-                    self.firebase_logger.log_message(
-                        level="INFO",
-                        message=f"SCAN_SUMMARY: {validated_count} validated, {rejected_count} rejected",
-                        module="pair_scanner_summary",
-                        additional_data={
-                            'total_pairs': len(detailed_decisions),
-                            'validated_pairs': validated_count,
-                            'rejected_pairs': rejected_count,
-                            'exclusion_stats': exclusion_stats,
-                            'config_thresholds': {
-                                'min_volume': self.config.MIN_VOLUME_USDC,
-                                'max_spread': self.config.MAX_SPREAD_PERCENT,
-                                'min_volatility_1h': self.config.MIN_VOLATILITY_1H_PERCENT,
-                                'min_signal_conditions': self.config.MIN_SIGNAL_CONDITIONS
-                            }
-                        }
-                    )
+                    # Logger le résumé du scan
+                    summary_data = {
+                        'total_pairs': len(detailed_decisions),
+                        'validated_pairs': validated_count,
+                        'rejected_pairs': rejected_count,
+                        'exclusion_stats': exclusion_stats,
+                        'config_thresholds': {
+                            'min_volume': self.config.MIN_VOLUME_USDC,
+                            'max_spread': self.config.MAX_SPREAD_PERCENT,
+                            'min_volatility_1h': self.config.MIN_VOLATILITY_1H_PERCENT,
+                            'min_signal_conditions': self.config.MIN_SIGNAL_CONDITIONS
+                        },
+                        'scan_duration_ms': 0  # Peut être ajouté plus tard si besoin
+                    }
+                    
+                    self.firebase_logger.log_scan_summary(summary_data)
+                    
+                    self.logger.info(f"🔥 {len(detailed_decisions)} décisions et résumé sauvegardés dans result_pair_scan")
                     
                 except Exception as e:
                     self.logger.error(f"❌ Erreur logging Firebase décisions: {e}")
@@ -1018,12 +1054,19 @@ class ScalpingBot:
                     return
             
             # 📊 COLLECTE DES DONNÉES TECHNIQUES COMPLÈTES pour logging détaillé
-            ticker_24h = self.binance_client.get_ticker(symbol=symbol)
-            volume_usdc = float(ticker_24h['quoteVolume'])
-            bid = float(ticker_24h['bidPrice'])
-            ask = float(ticker_24h['askPrice'])
-            spread = (ask - bid) / bid * 100
-            price_change_24h = float(ticker_24h['priceChangePercent'])
+            try:
+                ticker_24h = self.binance_client.get_ticker(symbol=symbol)
+                volume_usdc = float(ticker_24h.get('quoteVolume', ticker_24h.get('volume', 0)))
+                bid = float(ticker_24h.get('bidPrice', ticker_24h.get('bid', 0)))
+                ask = float(ticker_24h.get('askPrice', ticker_24h.get('ask', 0)))
+                spread = (ask - bid) / bid * 100 if bid > 0 else 0
+                price_change_24h = float(ticker_24h.get('priceChangePercent', ticker_24h.get('priceChange', 0)))
+            except Exception as e:
+                self.logger.error(f"❌ Erreur récupération ticker {symbol}: {e}")
+                # Valeurs par défaut en cas d'erreur
+                volume_usdc = 0
+                spread = 0
+                price_change_24h = 0
             
             # Calcul volatilité 1h
             volatility_1h = self.calculate_volatility_1h(symbol)
