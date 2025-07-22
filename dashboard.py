@@ -126,7 +126,8 @@ def get_real_time_data(db, collection_name: str, limit: int = 100) -> List[Dict]
             return []
         
         try:
-            docs = db.collection(collection_name).limit(limit).stream()
+            # CORRECTION: Ajouter l'ordre par timestamp DESCENDING pour avoir les plus récents
+            docs = db.collection(collection_name).order_by('timestamp', direction=firestore.Query.DESCENDING).limit(limit).stream()
         except Exception as e:
             st.error(f"Erreur Firebase: {e}")
             return []

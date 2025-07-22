@@ -159,7 +159,7 @@ class FirebaseLogger:
             # Test Firestore
             doc_ref = self.firestore_db.collection('_connection_test').document('test') # type: ignore
             doc_ref.set({
-                'timestamp': datetime.now(),
+                'timestamp': datetime.now().isoformat(),
                 'session_id': self.session_id,
                 'status': 'connected'
             })
