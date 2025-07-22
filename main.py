@@ -547,7 +547,7 @@ class ScalpingBot:
                 await asyncio.sleep(5)
 
     async def scan_usdc_pairs(self) -> List[PairScore]:
-        """Scanne et classe les paires USDC par score"""
+        """Scanne et classe les paires USDC par score avec logging détaillé des exclusions"""
         try:
             self.logger.info("🔎 Scan des paires USDC en cours...")
             
@@ -556,18 +556,35 @@ class ScalpingBot:
             usdc_pairs = [t for t in tickers if t['symbol'].endswith('USDC')]
             
             pair_scores = []
+            exclusion_stats = {
+                'blacklisted': 0,
+                'low_volume': 0,
+                'high_spread': 0,
+                'low_volatility': 0,
+                'total_analyzed': len(usdc_pairs)
+            }
+            excluded_pairs = {
+                'blacklisted': [],
+                'low_volume': [],
+                'high_spread': [],
+                'low_volatility': []
+            }
             
             for ticker in usdc_pairs:
                 symbol = ticker['symbol']
 
                 # Exclusion des paires blacklistées
                 if symbol in BLACKLISTED_PAIRS:
+                    exclusion_stats['blacklisted'] += 1
+                    excluded_pairs['blacklisted'].append(symbol)
                     self.logger.debug(f"⚫ {symbol} exclu (blacklisté)")
                     continue
                 
                 # Vérification volume minimum
                 volume_usdc = float(ticker['quoteVolume'])
                 if volume_usdc < self.config.MIN_VOLUME_USDC:
+                    exclusion_stats['low_volume'] += 1
+                    excluded_pairs['low_volume'].append(f"{symbol}({volume_usdc/1000000:.1f}M)")
                     continue
                 
                 # Calcul spread
@@ -576,10 +593,19 @@ class ScalpingBot:
                 spread = (ask - bid) / bid * 100
                 
                 if spread > self.config.MAX_SPREAD_PERCENT:
+                    exclusion_stats['high_spread'] += 1
+                    excluded_pairs['high_spread'].append(f"{symbol}({spread:.2f}%)")
                     continue
                 
-                # Calcul volatilité
+                # Calcul volatilité 24h
                 price_change = abs(float(ticker['priceChangePercent']))
+                
+                # 🚫 NOUVEAU: Filtrage volatilité horaire pour éviter ranges plats
+                volatility_1h = self.calculate_volatility_1h(symbol)
+                if volatility_1h < self.config.MIN_VOLATILITY_1H_PERCENT:
+                    exclusion_stats['low_volatility'] += 1
+                    excluded_pairs['low_volatility'].append(f"{symbol}({volatility_1h:.1f}%)")
+                    continue
                 
                 # Calcul ATR (optionnel)
                 atr = await self.calculate_atr(symbol)
@@ -596,24 +622,49 @@ class ScalpingBot:
                     atr=atr
                 ))
             
+            # 📊 LOGGING DÉTAILLÉ DES EXCLUSIONS
+            self.logger.info(f"📊 Scan terminé - {exclusion_stats['total_analyzed']} paires analysées:")
+            self.logger.info(f"   ⚫ Blacklistées: {exclusion_stats['blacklisted']} paires")
+            if excluded_pairs['blacklisted']:
+                self.logger.info(f"      {', '.join(excluded_pairs['blacklisted'][:5])}")
+            
+            self.logger.info(f"   📉 Volume < {self.config.MIN_VOLUME_USDC/1000000:.0f}M: {exclusion_stats['low_volume']} paires")
+            if excluded_pairs['low_volume'][:3]:
+                self.logger.info(f"      {', '.join(excluded_pairs['low_volume'][:3])}")
+            
+            self.logger.info(f"   📈 Spread > {self.config.MAX_SPREAD_PERCENT}%: {exclusion_stats['high_spread']} paires")
+            if excluded_pairs['high_spread'][:3]:
+                self.logger.info(f"      {', '.join(excluded_pairs['high_spread'][:3])}")
+            
+            self.logger.info(f"   ⏱️ Volatilité 1h < {self.config.MIN_VOLATILITY_1H_PERCENT}%: {exclusion_stats['low_volatility']} paires")
+            if excluded_pairs['low_volatility'][:3]:
+                self.logger.info(f"      {', '.join(excluded_pairs['low_volatility'][:3])}")
+            
             # Tri par score décroissant
             pair_scores.sort(key=lambda x: x.score, reverse=True)
             top_pairs = pair_scores[:self.config.MAX_PAIRS_TO_ANALYZE]
             
-            self.logger.info(f"📊 Top {len(top_pairs)} paires sélectionnées:")
+            self.logger.info(f"✅ {len(pair_scores)} paires validées, Top {len(top_pairs)} sélectionnées:")
             for i, pair in enumerate(top_pairs):
                 self.logger.info(f"  {i+1}. {pair.pair} - Score: {pair.score:.2f} - Vol: {pair.volatility:.2f}% - Volume: {pair.volume/1000000:.1f}M USDC")
             
-            # 🔥 LOG FIREBASE: Résultat du scan des paires
-            if self.firebase_logger and top_pairs:
+            # 🔥 LOG FIREBASE: Résultat du scan avec exclusions détaillées
+            if self.firebase_logger and pair_scores:
                 top_3_pairs = [f"{p.pair}({p.score:.1f})" for p in top_pairs[:3]]
                 self.firebase_logger.log_message(
                     level="INFO",
-                    message=f"📊 Scan terminé: {len(pair_scores)} paires analysées, Top 3: {', '.join(top_3_pairs)}",
+                    message=f"📊 Scan terminé: {len(pair_scores)} paires validées, Top 3: {', '.join(top_3_pairs)}",
                     module="pair_scanner",
                     additional_data={
-                        'total_pairs_scanned': len(pair_scores),
+                        'total_pairs_analyzed': exclusion_stats['total_analyzed'],
+                        'pairs_validated': len(pair_scores),
                         'top_pairs_selected': len(top_pairs),
+                        'exclusions': exclusion_stats,
+                        'excluded_samples': {
+                            'low_volume': excluded_pairs['low_volume'][:3],
+                            'high_spread': excluded_pairs['high_spread'][:3],
+                            'low_volatility': excluded_pairs['low_volatility'][:3]
+                        },
                         'best_pair': top_pairs[0].pair if top_pairs else None,
                         'best_score': top_pairs[0].score if top_pairs else 0
                     }
@@ -769,7 +820,7 @@ class ScalpingBot:
             return None
 
     async def execute_trade(self, symbol: str, direction: TradeDirection):
-        """Exécute un trade avec contrôle anti-fragmentation"""
+        """Exécute un trade avec contrôle anti-fragmentation et logging détaillé des données techniques"""
         try:
             # 🚨 CONTRÔLE ANTI-FRAGMENTATION
             now = datetime.now()
@@ -793,6 +844,45 @@ class ScalpingBot:
                         )
                     
                     return
+            
+            # 📊 COLLECTE DES DONNÉES TECHNIQUES COMPLÈTES pour logging détaillé
+            ticker_24h = self.binance_client.get_ticker(symbol=symbol)
+            volume_usdc = float(ticker_24h['quoteVolume'])
+            bid = float(ticker_24h['bidPrice'])
+            ask = float(ticker_24h['askPrice'])
+            spread = (ask - bid) / bid * 100
+            price_change_24h = float(ticker_24h['priceChangePercent'])
+            
+            # Calcul volatilité 1h
+            volatility_1h = self.calculate_volatility_1h(symbol)
+            
+            # Récupération des données pour analyse technique détaillée
+            klines = self.binance_client.get_klines(
+                symbol=symbol,
+                interval=getattr(Client, f'KLINE_INTERVAL_{self.config.TIMEFRAME}'),
+                limit=100
+            )
+            
+            df = pd.DataFrame(klines, columns=[
+                'timestamp', 'open', 'high', 'low', 'close', 'volume',
+                'close_time', 'quote_volume', 'trades_count', 'taker_buy_base', 'taker_buy_quote', 'ignore'
+            ])
+            
+            for col in ['open', 'high', 'low', 'close', 'volume']:
+                df[col] = df[col].astype(float)
+            
+            # Analyse technique détaillée
+            analysis = self.technical_analyzer.analyze_pair(df, symbol)
+            
+            # Calcul RSI, MACD, EMA actuels
+            closes = df['close'].values
+            rsi_current = talib.RSI(closes, timeperiod=self.config.RSI_PERIOD)[-1] # type: ignore
+            macd, macd_signal, macd_hist = talib.MACD(closes, # type: ignore
+                                                      fastperiod=self.config.MACD_FAST_PERIOD,
+                                                      slowperiod=self.config.MACD_SLOW_PERIOD, 
+                                                      signalperiod=self.config.MACD_SIGNAL_PERIOD)
+            ema_fast = talib.EMA(closes, timeperiod=self.config.EMA_FAST_PERIOD)[-1] # type: ignore
+            ema_slow = talib.EMA(closes, timeperiod=self.config.EMA_SLOW_PERIOD)[-1] # type: ignore
             
             # Calculer la volatilité pour cette paire
             volatility = self.calculate_volatility_1h(symbol)
@@ -991,8 +1081,32 @@ class ScalpingBot:
             self.logger.info(f"   🎯 Take Profit: {take_profit:.4f} USDC (+{self.config.TAKE_PROFIT_PERCENT}%)")
             self.logger.info(f"   💵 Capital engagé: {position_size:.2f} USDC")
             
-            # Firebase logging pour trade ouvert
+            # 📊 LOGGING DÉTAILLÉ DES DONNÉES TECHNIQUES
+            self.logger.info(f"📊 Données techniques lors de l'entrée:")
+            self.logger.info(f"   📈 RSI: {rsi_current:.1f} | MACD: {macd[-1]:.6f} | Signal: {macd_signal[-1]:.6f}")
+            self.logger.info(f"   ⚡ EMA Fast: {ema_fast:.4f} | EMA Slow: {ema_slow:.4f}")
+            self.logger.info(f"   📊 Score analyse: {analysis.total_score:.1f} | Tendance: {analysis.trend}")
+            self.logger.info(f"   💹 Volume 24h: {volume_usdc/1000000:.1f}M USDC | Spread: {spread:.2f}%")
+            self.logger.info(f"   🌡️ Volatilité 1h: {volatility_1h:.2f}% | 24h: {abs(price_change_24h):.2f}%")
+            self.logger.info(f"   ✅ Signaux détectés: {len(analysis.signals)}/{self.config.MIN_SIGNAL_CONDITIONS}")
+            
+            # Affichage des signaux principaux
+            for i, signal in enumerate(analysis.signals[:3]):  # Max 3 signaux pour éviter spam
+                strength_emoji = {"WEAK": "🟡", "MODERATE": "🟠", "STRONG": "🔴", "VERY_STRONG": "🟣"}
+                emoji = strength_emoji.get(signal.strength.name, "⚪")
+                self.logger.info(f"   {emoji} Signal {i+1}: {signal.indicator} - {signal.description}")
+            
+            # Firebase logging pour trade ouvert avec données techniques complètes
             if self.firebase_logger:
+                # Préparer les signaux détectés
+                signals_data = []
+                for signal in analysis.signals:
+                    signals_data.append({
+                        'indicator': signal.indicator,
+                        'description': signal.description,
+                        'strength': signal.strength.name
+                    })
+                
                 self.firebase_logger.log_message(
                     level="INFO",
                     message=f"📈 TRADE OUVERT: {symbol} - Prix: {current_price:.4f}",
@@ -1007,7 +1121,29 @@ class ScalpingBot:
                         'stop_loss': stop_loss,
                         'take_profit': take_profit,
                         'position_size': position_size,
-                        'volatility': volatility
+                        'volatility_1h': volatility_1h,
+                        'volatility_24h': abs(price_change_24h),
+                        'technical_data': {
+                            'rsi': float(rsi_current) if not np.isnan(rsi_current) else 0,
+                            'macd': float(macd[-1]) if len(macd) > 0 and not np.isnan(macd[-1]) else 0,
+                            'macd_signal': float(macd_signal[-1]) if len(macd_signal) > 0 and not np.isnan(macd_signal[-1]) else 0,
+                            'macd_hist': float(macd_hist[-1]) if len(macd_hist) > 0 and not np.isnan(macd_hist[-1]) else 0,
+                            'ema_fast': float(ema_fast) if not np.isnan(ema_fast) else 0,
+                            'ema_slow': float(ema_slow) if not np.isnan(ema_slow) else 0,
+                            'analysis_score': analysis.total_score,
+                            'trend': analysis.trend,
+                            'momentum': analysis.momentum
+                        },
+                        'market_data': {
+                            'volume_24h_usdc': volume_usdc,
+                            'spread_percent': spread,
+                            'price_change_24h': price_change_24h,
+                            'bid_price': bid,
+                            'ask_price': ask
+                        },
+                        'signals_detected': signals_data,
+                        'conditions_met': len(analysis.signals),
+                        'min_conditions_required': self.config.MIN_SIGNAL_CONDITIONS
                     }
                 )
             
@@ -1024,7 +1160,7 @@ class ScalpingBot:
             else:
                 capital_after_trade = self.get_total_capital()
             
-            # 🔥 LOG FIREBASE: Trade ouvert
+            # 🔥 LOG FIREBASE: Trade ouvert avec données techniques complètes
             self.firebase_logger.log_trade({
                 'trade_id': trade_id,
                 'timestamp': trade.timestamp.isoformat(),
@@ -1038,12 +1174,27 @@ class ScalpingBot:
                 'capital_before': capital_before_trade,
                 'capital_after': capital_after_trade,
                 'session_trading': get_current_trading_session(),
-                'volatility': volatility,
-                'volume_24h': f"{final_notional:.0f}",
+                'volatility_1h': volatility_1h,
+                'volatility_24h': abs(price_change_24h),
+                'volume_24h_usdc': volume_usdc,
+                'spread_percent': spread,
+                'technical_indicators': {
+                    'rsi': float(rsi_current) if not np.isnan(rsi_current) else 0,
+                    'macd': float(macd[-1]) if len(macd) > 0 and not np.isnan(macd[-1]) else 0,
+                    'macd_signal': float(macd_signal[-1]) if len(macd_signal) > 0 and not np.isnan(macd_signal[-1]) else 0,
+                    'macd_hist': float(macd_hist[-1]) if len(macd_hist) > 0 and not np.isnan(macd_hist[-1]) else 0,
+                    'ema_fast': float(ema_fast) if not np.isnan(ema_fast) else 0,
+                    'ema_slow': float(ema_slow) if not np.isnan(ema_slow) else 0,
+                    'analysis_score': analysis.total_score,
+                    'trend': analysis.trend,
+                    'momentum': analysis.momentum
+                },
                 'signals': {
                     'direction': direction.value,
                     'position_size': position_size,
-                    'anti_fragmentation': True
+                    'anti_fragmentation': True,
+                    'conditions_met': len(analysis.signals),
+                    'signals_count': len(analysis.signals)
                 }
             })
             

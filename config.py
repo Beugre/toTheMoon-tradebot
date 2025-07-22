@@ -44,10 +44,10 @@ class TradingConfig:
     MIN_PROFIT_BEFORE_TIMEOUT: float = 0.1  # Sortie plus rapide si petit profit
     
     # Paramètres de sélection des paires USDC - Critères renforcés OPTIMISÉS
-    MIN_VOLUME_USDC: float = 100000000  # OPTIMISÉ: Volume minimum 100M$ (ultra-liquide)
+    MIN_VOLUME_USDC: float = 75000000  # OPTIMISÉ: Volume minimum 75M$ (haute liquidité)
     MAX_SPREAD_PERCENT: float = 0.15  # OPTIMISÉ: Spread plus strict 0.15% pour éviter slippage
     MAX_PAIRS_TO_ANALYZE: int = 6  # OPTIMISÉ: Moins de paires, meilleures uniquement
-    MIN_VOLATILITY_1H_PERCENT: float = 0.5  # Volatilité minimum 1h requise
+    MIN_VOLATILITY_1H_PERCENT: float = 2.5  # OPTIMISÉ: Volatilité minimum 2.5% pour éviter ranges plats
     
     # Horaires de trading optimisés (heure française/européenne)
     TRADING_HOURS_ENABLED: bool = True  # Activer restriction horaires
