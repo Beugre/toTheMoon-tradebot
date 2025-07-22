@@ -179,18 +179,16 @@ BLACKLISTED_PAIRS = [
 
 # Paires prioritaires USDC (haute liquidité) - OPTIMISÉES
 PRIORITY_USDC_PAIRS = [
-    'BTCUSDC',   # 2B$ volume/jour - Meilleure performance
-    'ETHUSDC',   # 1.5B$ volume/jour - Acceptable
-    'MATICUSDC', # 150M$ volume/jour
-    'LTCUSDC',   # 150M$ volume/jour
-    'LINKUSDC',  # 100M$ volume/jour
-    'DOTUSDC',   # 80M$ volume/jour
-    # Paires BLACKLISTÉES pour mauvaises performances:
-    # 'XRPUSDC',   # -6.12 USDC (2 trades) - BLACKLISTÉ
-    # 'DOGEUSDC',  # -5.31 USDC (1 trade) - BLACKLISTÉ
-    # 'ADAUSDC',   # -15.58 USDC (4 trades) - BLACKLISTÉ
-    # 'SUIUSDC',   # -13.47 USDC (5 trades) - BLACKLISTÉ
-    # 'SOLUSDC',   # - 77 USDC (3 trades) - BLACKLISTÉ
+    'BTCUSDC',   # ~2B$ volume/jour
+    'ETHUSDC',   # ~1.5B$ volume/jour
+    'FDUSDUSDC', # Stablecoin pivot secondaire (volume élevé, faible spread)
+    'AVAXUSDC',  # Volatilité saine, spread OK
+    'LINKUSDC',  # ~100M$ volume/jour
+    'MATICUSDC', # ~150M$ volume/jour
+    'LTCUSDC',   # ~150M$ volume/jour
+    'TONUSDC',   # Volatile, bon volume récent
+    'BNBUSDC',   # Attention : sans BNB burn
+    'DOTUSDC'    # Volume ≥80M$, stabilité correcte
 ]
 
 # Configuration du logging
