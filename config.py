@@ -44,10 +44,15 @@ class TradingConfig:
     MIN_PROFIT_BEFORE_TIMEOUT: float = 0.1  # Sortie plus rapide si petit profit
     
     # Paramètres de sélection des paires USDC - Critères renforcés OPTIMISÉS
-    MIN_VOLUME_USDC: float = 75000000  # OPTIMISÉ: Volume minimum 75M$ (haute liquidité)
+    MIN_VOLUME_USDC: float = 50000000  # OPTIMISÉ: Volume minimum 50M$ (équilibré)
     MAX_SPREAD_PERCENT: float = 0.15  # OPTIMISÉ: Spread plus strict 0.15% pour éviter slippage
     MAX_PAIRS_TO_ANALYZE: int = 6  # OPTIMISÉ: Moins de paires, meilleures uniquement
-    MIN_VOLATILITY_1H_PERCENT: float = 2.5  # OPTIMISÉ: Volatilité minimum 2.5% pour éviter ranges plats
+    MIN_VOLATILITY_1H_PERCENT: float = 0.8  # OPTIMISÉ: Volatilité minimum 0.8% (permet BTC/ETH même calmes)
+    
+    # Configuration adaptative pour marchés calmes
+    ADAPTIVE_FILTERING: bool = True  # Adaptation automatique selon conditions marché
+    MIN_VOLUME_USDC_FALLBACK: float = 30000000  # Volume fallback si pas assez de paires (30M)
+    MIN_VOLATILITY_1H_FALLBACK: float = 0.5  # Volatilité fallback si marché trop calme (0.5%)
     
     # Horaires de trading optimisés (heure française/européenne)
     TRADING_HOURS_ENABLED: bool = True  # Activer restriction horaires
@@ -103,7 +108,7 @@ class TradingConfig:
     
     # Paramètres de gestion des positions et soldes
     PHANTOM_POSITION_THRESHOLD: float = 0.00001  # Seuil position fantôme
-    DUST_BALANCE_THRESHOLD_USDC: float = 5.0  # Ignorer les soldes < 5$ USDC pour exposition
+    DUST_BALANCE_THRESHOLD_USDC: float = 10.0  # Ignorer les soldes < 10$ USDC pour exposition
     BALANCE_SAFETY_MARGIN: float = 0.999  # Marge de sécurité pour soldes (99.9%)
     BALANCE_TOLERANCE: float = 0.001  # Tolérance erreurs d'arrondi
     

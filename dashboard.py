@@ -125,10 +125,11 @@ def get_real_time_data(db, collection_name: str, limit: int = 100) -> List[Dict]
         if db is None:
             return []
         
-        docs = db.collection(collection_name)\
-                .order_by('timestamp', direction=firestore.Query.DESCENDING)\
-                .limit(limit)\
-                .stream()
+        try:
+            docs = db.collection(collection_name).limit(limit).stream()
+        except Exception as e:
+            st.error(f"Erreur Firebase: {e}")
+            return []
         
         data = []
         for doc in docs:
@@ -633,6 +634,239 @@ def show_config():
     else:
         st.warning("⚠️ Configuration API non disponible")
 
+def show_analytics(db):
+    """Affiche l'analyse détaillée des décisions de trading"""
+    st.header("📊 Analytics - Décisions de Trading")
+    st.markdown("*Analyse temps réel des paires validées/rejetées pour optimisation des seuils*")
+    
+    # Récupération des données de décisions
+    decisions_data = get_real_time_data(db, "logs", limit=1000)
+    
+    # Filtrer seulement les décisions de paires
+    pair_decisions = [d for d in decisions_data if d.get('module') == 'pair_scanner_decisions']
+    scan_summaries = [d for d in decisions_data if d.get('module') == 'pair_scanner_summary']
+    
+    if not pair_decisions:
+        st.warning("⚠️ Aucune donnée de décision trouvée. Le bot doit scanner des paires pour générer des données.")
+        return
+    
+    # Conversion en DataFrame
+    df_decisions = pd.DataFrame(pair_decisions)
+    df_decisions['timestamp'] = pd.to_datetime(df_decisions['timestamp'])
+    df_decisions['timestamp_paris'] = df_decisions['timestamp'].apply(to_paris_time)
+    
+    # Extraire les données détaillées
+    decisions_detail = []
+    for _, row in df_decisions.iterrows():
+        if 'additional_data' in row and row['additional_data']:
+            detail = row['additional_data']
+            detail['log_timestamp'] = row['timestamp_paris']
+            decisions_detail.append(detail)
+    
+    if not decisions_detail:
+        st.warning("⚠️ Aucune donnée détaillée disponible")
+        return
+    
+    df_detailed = pd.DataFrame(decisions_detail)
+    df_detailed['timestamp'] = pd.to_datetime(df_detailed['timestamp'])
+    df_detailed['timestamp_paris'] = df_detailed['timestamp'].apply(to_paris_time)
+    
+    # Métriques globales
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        total_decisions = len(df_detailed)
+        st.metric("🔍 Total Paires Analysées", total_decisions)
+    
+    with col2:
+        validated = len(df_detailed[df_detailed['final_decision'] == 'VALIDATED'])
+        validation_rate = (validated / total_decisions * 100) if total_decisions > 0 else 0
+        st.metric("✅ Paires Validées", validated, delta=f"{validation_rate:.1f}%")
+    
+    with col3:
+        rejected = len(df_detailed[df_detailed['final_decision'] == 'REJECTED'])
+        rejection_rate = (rejected / total_decisions * 100) if total_decisions > 0 else 0
+        st.metric("❌ Paires Rejetées", rejected, delta=f"{rejection_rate:.1f}%")
+    
+    with col4:
+        # Dernière analyse
+        last_scan = df_detailed['timestamp_paris'].max() if len(df_detailed) > 0 else None
+        if last_scan:
+            st.metric("🕐 Dernier Scan", last_scan.strftime("%H:%M:%S"))
+    
+    # Filtres
+    st.markdown("### 🔍 Filtres")
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        # Filtre par période
+        hours_back = st.selectbox("📅 Période", [1, 6, 12, 24, 48], index=2)
+        cutoff_time = now_paris() - timedelta(hours=hours_back)
+        df_filtered = df_detailed[df_detailed['timestamp_paris'] >= cutoff_time]
+    
+    with col2:
+        # Filtre par paire
+        unique_pairs = sorted(df_detailed['pair'].unique())
+        selected_pairs = st.multiselect("💹 Paires", unique_pairs, default=unique_pairs[:10])
+        if selected_pairs:
+            df_filtered = df_filtered[df_filtered['pair'].isin(selected_pairs)]
+    
+    with col3:
+        # Filtre par décision
+        decision_filter = st.selectbox("🎯 Décision", ["Toutes", "VALIDATED", "REJECTED"])
+        if decision_filter != "Toutes":
+            df_filtered = df_filtered[df_filtered['final_decision'] == decision_filter]
+    
+    # Heatmap des raisons de rejet
+    st.markdown("### 🔥 Heatmap des Raisons de Rejet")
+    
+    if len(df_filtered) > 0:
+        rejected_data = df_filtered[df_filtered['final_decision'] == 'REJECTED']
+        
+        if len(rejected_data) > 0:
+            # Analyser les raisons
+            reasons = []
+            for reason in rejected_data['reason']:
+                if 'Volume <' in reason:
+                    reasons.append('Volume insuffisant')
+                elif 'Spread >' in reason:
+                    reasons.append('Spread trop élevé')
+                elif 'Volatility 1h <' in reason:
+                    reasons.append('Volatilité 1h faible')
+                elif 'Signal score <' in reason:
+                    reasons.append('Score signal insuffisant')
+                elif 'Blacklisted' in reason:
+                    reasons.append('Paire blacklistée')
+                else:
+                    reasons.append('Autre')
+            
+            reason_counts = pd.Series(reasons).value_counts()
+            
+            # Graphique en barres des raisons
+            fig_reasons = px.bar(
+                x=reason_counts.values,
+                y=reason_counts.index,
+                orientation='h',
+                title="Principales Raisons de Rejet",
+                labels={'x': 'Nombre de rejets', 'y': 'Raison'}
+            )
+            fig_reasons.update_layout(height=400)
+            st.plotly_chart(fig_reasons, use_container_width=True)
+            
+            # Tableau détaillé par paire
+            st.markdown("### 📊 Analyse par Paire")
+            
+            pair_analysis = df_filtered.groupby('pair').agg({
+                'final_decision': 'count',
+                'volume_24h': 'mean',
+                'spread_pct': 'mean',
+                'volatility_1h_pct': 'mean',
+                'signal_score': 'mean'
+            }).rename(columns={
+                'final_decision': 'analyses_count',
+                'volume_24h': 'avg_volume',
+                'spread_pct': 'avg_spread',
+                'volatility_1h_pct': 'avg_volatility_1h',
+                'signal_score': 'avg_signal_score'
+            })
+            
+            # Ajouter les taux de validation par paire
+            validation_rates = df_filtered.groupby('pair')['final_decision'].apply(
+                lambda x: (x == 'VALIDATED').sum() / len(x) * 100
+            )
+            pair_analysis['validation_rate'] = validation_rates
+            
+            # Formater pour affichage
+            pair_analysis_display = pair_analysis.copy()
+            pair_analysis_display['avg_volume'] = pair_analysis_display['avg_volume'].apply(lambda x: f"{x/1000000:.1f}M")
+            pair_analysis_display['avg_spread'] = pair_analysis_display['avg_spread'].apply(lambda x: f"{x:.3f}%")
+            pair_analysis_display['avg_volatility_1h'] = pair_analysis_display['avg_volatility_1h'].apply(lambda x: f"{x:.2f}%")
+            pair_analysis_display['avg_signal_score'] = pair_analysis_display['avg_signal_score'].apply(lambda x: f"{x:.1f}")
+            pair_analysis_display['validation_rate'] = pair_analysis_display['validation_rate'].apply(lambda x: f"{x:.1f}%")
+            
+            st.dataframe(
+                pair_analysis_display.rename(columns={
+                    'analyses_count': 'Analyses',
+                    'avg_volume': 'Volume Moy',
+                    'avg_spread': 'Spread Moy',
+                    'avg_volatility_1h': 'Volatilité 1h',
+                    'avg_signal_score': 'Score Signal',
+                    'validation_rate': 'Taux Validation'
+                }),
+                use_container_width=True
+            )
+            
+            # Timeline des décisions
+            st.markdown("### ⏰ Timeline des Décisions")
+            
+            # Préparer les données pour le timeline
+            df_timeline = df_filtered.copy()
+            df_timeline['hour'] = df_timeline['timestamp_paris'].dt.floor('H')
+            
+            timeline_data = df_timeline.groupby(['hour', 'final_decision']).size().unstack(fill_value=0)
+            
+            if not timeline_data.empty:
+                fig_timeline = go.Figure()
+                
+                if 'VALIDATED' in timeline_data.columns:
+                    fig_timeline.add_trace(go.Scatter(
+                        x=timeline_data.index,
+                        y=timeline_data['VALIDATED'],
+                        mode='lines+markers',
+                        name='Validées',
+                        line=dict(color='green'),
+                        fill='tonexty'
+                    ))
+                
+                if 'REJECTED' in timeline_data.columns:
+                    fig_timeline.add_trace(go.Scatter(
+                        x=timeline_data.index,
+                        y=timeline_data['REJECTED'],
+                        mode='lines+markers',
+                        name='Rejetées',
+                        line=dict(color='red'),
+                        fill='tozeroy'
+                    ))
+                
+                fig_timeline.update_layout(
+                    title="Évolution des Décisions par Heure",
+                    xaxis_title="Heure",
+                    yaxis_title="Nombre de Paires",
+                    height=400
+                )
+                
+                st.plotly_chart(fig_timeline, use_container_width=True)
+            
+            # Log en temps réel
+            st.markdown("### 📋 Log des Décisions Récentes")
+            
+            recent_decisions = df_filtered.nlargest(20, 'timestamp_paris')[
+                ['timestamp_paris', 'pair', 'final_decision', 'reason', 'volume_24h', 'spread_pct', 'volatility_1h_pct']
+            ].copy()
+            
+            recent_decisions['timestamp_paris'] = recent_decisions['timestamp_paris'].dt.strftime('%H:%M:%S')
+            recent_decisions['volume_24h'] = recent_decisions['volume_24h'].apply(lambda x: f"{x/1000000:.1f}M")
+            recent_decisions['spread_pct'] = recent_decisions['spread_pct'].apply(lambda x: f"{x:.3f}%")
+            recent_decisions['volatility_1h_pct'] = recent_decisions['volatility_1h_pct'].apply(lambda x: f"{x:.2f}%")
+            
+            st.dataframe(
+                recent_decisions.rename(columns={
+                    'timestamp_paris': 'Heure',
+                    'pair': 'Paire',
+                    'final_decision': 'Décision',
+                    'reason': 'Raison',
+                    'volume_24h': 'Volume',
+                    'spread_pct': 'Spread',
+                    'volatility_1h_pct': 'Vol 1h'
+                }),
+                use_container_width=True
+            )
+            
+        else:
+            st.info("ℹ️ Aucune donnée de rejet dans la période sélectionnée")
+    else:
+        st.warning("⚠️ Aucune donnée dans la période sélectionnée")
+
 def main():
     """Fonction principale du dashboard - CORRIGÉE"""
     # Titre principal
@@ -653,6 +887,7 @@ def main():
                             "📈 Performance", 
                             "💹 Trades", 
                             "🔔 Logs",
+                            "📊 Analytics",
                             "⚙️ Configuration"])
     
     # Status en sidebar
@@ -699,6 +934,8 @@ def main():
         show_trades(db)
     elif page == "🔔 Logs":
         show_logs(db)
+    elif page == "📊 Analytics":
+        show_analytics(db)
     elif page == "⚙️ Configuration":
         show_config()
 

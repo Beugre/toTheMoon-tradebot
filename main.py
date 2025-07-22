@@ -547,7 +547,7 @@ class ScalpingBot:
                 await asyncio.sleep(5)
 
     async def scan_usdc_pairs(self) -> List[PairScore]:
-        """Scanne et classe les paires USDC par score avec logging détaillé des exclusions"""
+        """Scanne et classe les paires USDC par score avec logging détaillé des décisions pour Firebase"""
         try:
             self.logger.info("🔎 Scan des paires USDC en cours...")
             
@@ -570,59 +570,179 @@ class ScalpingBot:
                 'low_volatility': []
             }
             
+            # 📊 Liste pour stocker toutes les décisions détaillées
+            detailed_decisions = []
+            
             for ticker in usdc_pairs:
                 symbol = ticker['symbol']
+                current_price = float(ticker['price'])
+                volume_usdc = float(ticker['quoteVolume'])
+                bid = float(ticker['bidPrice'])
+                ask = float(ticker['askPrice'])
+                spread = (ask - bid) / bid * 100
+                price_change = abs(float(ticker['priceChangePercent']))
+                volatility_1h = self.calculate_volatility_1h(symbol)
+                
+                # 📊 Structure détaillée de la décision
+                decision = {
+                    "timestamp": datetime.now().isoformat(),
+                    "pair": symbol,
+                    "price": current_price,
+                    "volume_24h": volume_usdc,
+                    "spread_pct": spread,
+                    "volatility_1h_pct": volatility_1h,
+                    "volatility_24h_pct": price_change,
+                    "signal_score": 0,  # Sera calculé plus tard si validé
+                    "conditions": {
+                        "blacklisted": symbol in BLACKLISTED_PAIRS,
+                        "volume_ok": volume_usdc >= self.config.MIN_VOLUME_USDC,
+                        "spread_ok": spread <= self.config.MAX_SPREAD_PERCENT,
+                        "volatility_ok": volatility_1h >= self.config.MIN_VOLATILITY_1H_PERCENT,
+                        "signal_score_ok": False,  # Sera vérifié plus tard
+                        "breaking_high": False  # Sera vérifié plus tard
+                    },
+                    "final_decision": "PENDING",
+                    "reason": ""
+                }
 
                 # Exclusion des paires blacklistées
                 if symbol in BLACKLISTED_PAIRS:
                     exclusion_stats['blacklisted'] += 1
                     excluded_pairs['blacklisted'].append(symbol)
-                    self.logger.debug(f"⚫ {symbol} exclu (blacklisté)")
+                    decision["final_decision"] = "REJECTED"
+                    decision["reason"] = "Blacklisted pair"
+                    detailed_decisions.append(decision)
                     continue
                 
                 # Vérification volume minimum
-                volume_usdc = float(ticker['quoteVolume'])
                 if volume_usdc < self.config.MIN_VOLUME_USDC:
                     exclusion_stats['low_volume'] += 1
                     excluded_pairs['low_volume'].append(f"{symbol}({volume_usdc/1000000:.1f}M)")
+                    decision["final_decision"] = "REJECTED"
+                    decision["reason"] = f"Volume < {self.config.MIN_VOLUME_USDC/1000000:.0f}M ({volume_usdc/1000000:.1f}M)"
+                    detailed_decisions.append(decision)
                     continue
                 
-                # Calcul spread
-                bid = float(ticker['bidPrice'])
-                ask = float(ticker['askPrice'])
-                spread = (ask - bid) / bid * 100
-                
+                # Vérification spread
                 if spread > self.config.MAX_SPREAD_PERCENT:
                     exclusion_stats['high_spread'] += 1
                     excluded_pairs['high_spread'].append(f"{symbol}({spread:.2f}%)")
+                    decision["final_decision"] = "REJECTED"
+                    decision["reason"] = f"Spread > {self.config.MAX_SPREAD_PERCENT}% ({spread:.2f}%)"
+                    detailed_decisions.append(decision)
                     continue
                 
-                # Calcul volatilité 24h
-                price_change = abs(float(ticker['priceChangePercent']))
-                
-                # 🚫 NOUVEAU: Filtrage volatilité horaire pour éviter ranges plats
-                volatility_1h = self.calculate_volatility_1h(symbol)
+                # Vérification volatilité horaire
                 if volatility_1h < self.config.MIN_VOLATILITY_1H_PERCENT:
                     exclusion_stats['low_volatility'] += 1
                     excluded_pairs['low_volatility'].append(f"{symbol}({volatility_1h:.1f}%)")
+                    decision["final_decision"] = "REJECTED"
+                    decision["reason"] = f"Volatility 1h < {self.config.MIN_VOLATILITY_1H_PERCENT}% ({volatility_1h:.1f}%)"
+                    detailed_decisions.append(decision)
                     continue
                 
-                # Calcul ATR (optionnel)
-                atr = await self.calculate_atr(symbol)
+                # ✅ Paire validée pour les critères de base - analyser les signaux
+                try:
+                    # Analyse technique pour calculer le score
+                    klines = self.binance_client.get_klines(
+                        symbol=symbol,
+                        interval=getattr(Client, f'KLINE_INTERVAL_{self.config.TIMEFRAME}'),
+                        limit=100
+                    )
+                    
+                    if len(klines) >= 50:
+                        df = pd.DataFrame(klines, columns=[
+                            'timestamp', 'open', 'high', 'low', 'close', 'volume',
+                            'close_time', 'quote_volume', 'trades_count', 'taker_buy_base', 'taker_buy_quote', 'ignore'
+                        ])
+                        
+                        for col in ['open', 'high', 'low', 'close', 'volume']:
+                            df[col] = df[col].astype(float)
+                        
+                        analysis = self.technical_analyzer.analyze_pair(df, symbol)
+                        decision["signal_score"] = analysis.total_score
+                        decision["conditions"]["signal_score_ok"] = len(analysis.signals) >= self.config.MIN_SIGNAL_CONDITIONS
+                        
+                        # Vérification cassure si activée
+                        if self.config.ENABLE_BREAKOUT_CONFIRMATION:
+                            breaking_high = self.check_breakout_confirmation(symbol, current_price)
+                            decision["conditions"]["breaking_high"] = breaking_high
+                        else:
+                            decision["conditions"]["breaking_high"] = True
+                        
+                        # Décision finale
+                        if decision["conditions"]["signal_score_ok"] and decision["conditions"]["breaking_high"]:
+                            decision["final_decision"] = "VALIDATED"
+                            decision["reason"] = f"All filters passed ✅ (Score: {analysis.total_score:.1f}, Signals: {len(analysis.signals)})"
+                            
+                            # Ajouter à la liste des paires validées
+                            atr = await self.calculate_atr(symbol)
+                            score = (0.6 * price_change + 0.4 * (volume_usdc / 1000000))
+                            
+                            pair_scores.append(PairScore(
+                                pair=symbol,
+                                volatility=price_change,
+                                volume=volume_usdc,
+                                score=score,
+                                spread=spread,
+                                atr=atr
+                            ))
+                        else:
+                            decision["final_decision"] = "REJECTED"
+                            reasons = []
+                            if not decision["conditions"]["signal_score_ok"]:
+                                reasons.append(f"Signal score < {self.config.MIN_SIGNAL_CONDITIONS} ({len(analysis.signals)})")
+                            if not decision["conditions"]["breaking_high"]:
+                                reasons.append("Not breaking high")
+                            decision["reason"] = " & ".join(reasons)
+                    else:
+                        decision["final_decision"] = "REJECTED"
+                        decision["reason"] = "Insufficient klines data"
+                        
+                except Exception as e:
+                    decision["final_decision"] = "REJECTED"
+                    decision["reason"] = f"Analysis error: {str(e)}"
                 
-                # Score de sélection
-                score = (0.6 * price_change + 0.4 * (volume_usdc / 1000000))
-                
-                pair_scores.append(PairScore(
-                    pair=symbol,
-                    volatility=price_change,
-                    volume=volume_usdc,
-                    score=score,
-                    spread=spread,
-                    atr=atr
-                ))
+                detailed_decisions.append(decision)
             
-            # 📊 LOGGING DÉTAILLÉ DES EXCLUSIONS
+            # � LOGGING FIREBASE: Sauvegarder toutes les décisions détaillées
+            if self.firebase_logger and detailed_decisions:
+                try:
+                    for decision in detailed_decisions:
+                        self.firebase_logger.log_message(
+                            level="INFO",
+                            message=f"PAIR_DECISION: {decision['pair']} - {decision['final_decision']}",
+                            module="pair_scanner_decisions",
+                            pair=decision['pair'],
+                            additional_data=decision
+                        )
+                    
+                    # Statistiques globales du scan
+                    validated_count = sum(1 for d in detailed_decisions if d['final_decision'] == 'VALIDATED')
+                    rejected_count = sum(1 for d in detailed_decisions if d['final_decision'] == 'REJECTED')
+                    
+                    self.firebase_logger.log_message(
+                        level="INFO",
+                        message=f"SCAN_SUMMARY: {validated_count} validated, {rejected_count} rejected",
+                        module="pair_scanner_summary",
+                        additional_data={
+                            'total_pairs': len(detailed_decisions),
+                            'validated_pairs': validated_count,
+                            'rejected_pairs': rejected_count,
+                            'exclusion_stats': exclusion_stats,
+                            'config_thresholds': {
+                                'min_volume': self.config.MIN_VOLUME_USDC,
+                                'max_spread': self.config.MAX_SPREAD_PERCENT,
+                                'min_volatility_1h': self.config.MIN_VOLATILITY_1H_PERCENT,
+                                'min_signal_conditions': self.config.MIN_SIGNAL_CONDITIONS
+                            }
+                        }
+                    )
+                    
+                except Exception as e:
+                    self.logger.error(f"❌ Erreur logging Firebase décisions: {e}")
+            
+            # �📊 LOGGING DÉTAILLÉ DES EXCLUSIONS (conservé pour logs console)
             self.logger.info(f"📊 Scan terminé - {exclusion_stats['total_analyzed']} paires analysées:")
             self.logger.info(f"   ⚫ Blacklistées: {exclusion_stats['blacklisted']} paires")
             if excluded_pairs['blacklisted']:
@@ -639,6 +759,58 @@ class ScalpingBot:
             self.logger.info(f"   ⏱️ Volatilité 1h < {self.config.MIN_VOLATILITY_1H_PERCENT}%: {exclusion_stats['low_volatility']} paires")
             if excluded_pairs['low_volatility'][:3]:
                 self.logger.info(f"      {', '.join(excluded_pairs['low_volatility'][:3])}")
+            
+            validated_pairs = sum(1 for d in detailed_decisions if d['final_decision'] == 'VALIDATED')
+            rejected_by_signals = sum(1 for d in detailed_decisions if d['final_decision'] == 'REJECTED' and 'Signal score' in d['reason'])
+            self.logger.info(f"   🎯 Signaux insuffisants: {rejected_by_signals} paires")
+            
+            # 🔄 LOGIQUE ADAPTATIVE si pas assez de paires validées (conservée)
+            if len(pair_scores) < 3 and hasattr(self.config, 'ADAPTIVE_FILTERING') and self.config.ADAPTIVE_FILTERING:
+                self.logger.warning(f"⚠️ Seulement {len(pair_scores)} paires validées - Activation mode adaptatif")
+                
+                # Relancer avec critères assouplis
+                pair_scores_fallback = []
+                min_vol_fallback = getattr(self.config, 'MIN_VOLUME_USDC_FALLBACK', 30000000)
+                min_volatility_fallback = getattr(self.config, 'MIN_VOLATILITY_1H_FALLBACK', 0.5)
+                
+                self.logger.info(f"🔄 Nouveaux critères: Volume >{min_vol_fallback/1000000:.0f}M, Volatilité >{min_volatility_fallback}%")
+                
+                for ticker in usdc_pairs:
+                    symbol = ticker['symbol']
+                    
+                    if symbol in BLACKLISTED_PAIRS:
+                        continue
+                    
+                    volume_usdc = float(ticker['quoteVolume'])
+                    if volume_usdc < min_vol_fallback:
+                        continue
+                    
+                    bid = float(ticker['bidPrice'])
+                    ask = float(ticker['askPrice'])
+                    spread = (ask - bid) / bid * 100
+                    if spread > self.config.MAX_SPREAD_PERCENT:
+                        continue
+                    
+                    price_change = abs(float(ticker['priceChangePercent']))
+                    volatility_1h = self.calculate_volatility_1h(symbol)
+                    if volatility_1h < min_volatility_fallback:
+                        continue
+                    
+                    atr = await self.calculate_atr(symbol)
+                    score = (0.6 * price_change + 0.4 * (volume_usdc / 1000000))
+                    
+                    pair_scores_fallback.append(PairScore(
+                        pair=symbol,
+                        volatility=price_change,
+                        volume=volume_usdc,
+                        score=score,
+                        spread=spread,
+                        atr=atr
+                    ))
+                
+                if len(pair_scores_fallback) > len(pair_scores):
+                    pair_scores = pair_scores_fallback
+                    self.logger.info(f"✅ Mode adaptatif: {len(pair_scores)} paires trouvées avec critères assouplis")
             
             # Tri par score décroissant
             pair_scores.sort(key=lambda x: x.score, reverse=True)
