@@ -22,7 +22,13 @@ from streamlit_autorefresh import st_autorefresh  # Auto-refresh automatique
 # Configuration timezone Paris
 PARIS_TZ = pytz.timezone('Europe/Paris')
 
-def to_paris_time(dt):
+def     # Conversion en DataFrame
+    df_decisions = pd.DataFrame(pair_decisions)
+    df_decisions['timestamp'] = pd.to_datetime(df_decisions['timestamp'])
+    
+    # Les données sont déjà structurées correctement dans la nouvelle collection
+    df_detailed = df_decisions.copy()
+    df_detailed['final_decision'] = df_detailed['decision']  # Normaliser le nom de colonne_time(dt):
     """Convertit datetime en timezone Paris"""
     if dt is None:
         return None
@@ -213,11 +219,10 @@ def show_overview(db):
         if len(df_recent) > 0:
             df_recent['real_pnl'] = df_recent['capital_after'] - df_recent['capital_before']
             df_recent['timestamp'] = pd.to_datetime(df_recent['timestamp'])
-            df_recent['timestamp_paris'] = df_recent['timestamp'].apply(to_paris_time)
             
-            display_recent = df_recent[['pair', 'real_pnl', 'capital_after', 'timestamp_paris']].copy()
+            display_recent = df_recent[['pair', 'real_pnl', 'capital_after', 'timestamp']].copy()
             display_recent['P&L'] = display_recent['real_pnl'].apply(lambda x: f"{x:+.4f}")
-            display_recent['Heure'] = display_recent['timestamp_paris'].dt.strftime('%H:%M:%S')
+            display_recent['Heure'] = display_recent['timestamp'].dt.strftime('%H:%M:%S')
             display_recent = display_recent[['pair', 'P&L', 'capital_after', 'Heure']]
             display_recent.columns = ['Paire', 'P&L', 'Capital Après', 'Heure']
             
@@ -359,18 +364,16 @@ def show_performance(db):
             st.subheader("🏆 Top 5 Meilleurs Trades")
             if len(df_pnl) > 0:
                 top_trades = df_pnl.nlargest(5, 'real_pnl')[['pair', 'real_pnl', 'timestamp']].copy()
-                top_trades['timestamp_paris'] = top_trades['timestamp'].apply(to_paris_time)
                 top_trades['P&L'] = top_trades['real_pnl'].apply(lambda x: f"{x:+.4f}")
-                top_trades['Heure'] = top_trades['timestamp_paris'].dt.strftime('%H:%M')
+                top_trades['Heure'] = top_trades['timestamp'].dt.strftime('%H:%M')
                 st.dataframe(top_trades[['pair', 'P&L', 'Heure']], use_container_width=True)
         
         with col2:
             st.subheader("💥 Top 5 Pires Trades")
             if len(df_pnl) > 0:
                 worst_trades = df_pnl.nsmallest(5, 'real_pnl')[['pair', 'real_pnl', 'timestamp']].copy()
-                worst_trades['timestamp_paris'] = worst_trades['timestamp'].apply(to_paris_time)
                 worst_trades['P&L'] = worst_trades['real_pnl'].apply(lambda x: f"{x:+.4f}")
-                worst_trades['Heure'] = worst_trades['timestamp_paris'].dt.strftime('%H:%M')
+                worst_trades['Heure'] = worst_trades['timestamp'].dt.strftime('%H:%M')
                 st.dataframe(worst_trades[['pair', 'P&L', 'Heure']], use_container_width=True)
         
         # === ANALYSE TEMPORELLE ===
@@ -491,8 +494,7 @@ def show_logs(db):
         
         # Affichage
         for _, log in df_filtered.head(50).iterrows():
-            timestamp_paris = to_paris_time(log['timestamp'])
-            timestamp = timestamp_paris.strftime("%H:%M:%S")
+            timestamp = log['timestamp'].strftime("%H:%M:%S")
             level = log.get('level', 'INFO')
             message = log.get('message', 'N/A')
             
@@ -684,7 +686,7 @@ def show_analytics(db):
     
     with col4:
         # Dernière analyse
-        last_scan = df_detailed['timestamp_paris'].max() if len(df_detailed) > 0 else None
+        last_scan = df_detailed['timestamp'].max() if len(df_detailed) > 0 else None
         if last_scan:
             st.metric("🕐 Dernier Scan", last_scan.strftime("%H:%M:%S"))
     
@@ -696,7 +698,7 @@ def show_analytics(db):
         # Filtre par période
         hours_back = st.selectbox("📅 Période", [1, 6, 12, 24, 48], index=2)
         cutoff_time = now_paris() - timedelta(hours=hours_back)
-        df_filtered = df_detailed[df_detailed['timestamp_paris'] >= cutoff_time]
+        df_filtered = df_detailed[df_detailed['timestamp'] >= cutoff_time]
     
     with col2:
         # Filtre par paire
@@ -795,7 +797,7 @@ def show_analytics(db):
             
             # Préparer les données pour le timeline
             df_timeline = df_filtered.copy()
-            df_timeline['hour'] = df_timeline['timestamp_paris'].dt.floor('H')
+            df_timeline['hour'] = df_timeline['timestamp'].dt.floor('H')
             
             timeline_data = df_timeline.groupby(['hour', 'final_decision']).size().unstack(fill_value=0)
             
@@ -834,18 +836,18 @@ def show_analytics(db):
             # Log en temps réel
             st.markdown("### 📋 Log des Décisions Récentes")
             
-            recent_decisions = df_filtered.nlargest(20, 'timestamp_paris')[
-                ['timestamp_paris', 'pair', 'final_decision', 'reason', 'volume_24h', 'spread_pct', 'volatility_1h_pct']
+            recent_decisions = df_filtered.nlargest(20, 'timestamp')[
+                ['timestamp', 'pair', 'final_decision', 'reason', 'volume_24h', 'spread_pct', 'volatility_1h_pct']
             ].copy()
             
-            recent_decisions['timestamp_paris'] = recent_decisions['timestamp_paris'].dt.strftime('%H:%M:%S')
+            recent_decisions['timestamp'] = recent_decisions['timestamp'].dt.strftime('%H:%M:%S')
             recent_decisions['volume_24h'] = recent_decisions['volume_24h'].apply(lambda x: f"{x/1000000:.1f}M")
             recent_decisions['spread_pct'] = recent_decisions['spread_pct'].apply(lambda x: f"{x:.3f}%")
             recent_decisions['volatility_1h_pct'] = recent_decisions['volatility_1h_pct'].apply(lambda x: f"{x:.2f}%")
             
             st.dataframe(
                 recent_decisions.rename(columns={
-                    'timestamp_paris': 'Heure',
+                    'timestamp': 'Heure',
                     'pair': 'Paire',
                     'final_decision': 'Décision',
                     'reason': 'Raison',
