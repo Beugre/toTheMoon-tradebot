@@ -22,13 +22,7 @@ from streamlit_autorefresh import st_autorefresh  # Auto-refresh automatique
 # Configuration timezone Paris
 PARIS_TZ = pytz.timezone('Europe/Paris')
 
-def     # Conversion en DataFrame
-    df_decisions = pd.DataFrame(pair_decisions)
-    df_decisions['timestamp'] = pd.to_datetime(df_decisions['timestamp'])
-    
-    # Les données sont déjà structurées correctement dans la nouvelle collection
-    df_detailed = df_decisions.copy()
-    df_detailed['final_decision'] = df_detailed['decision']  # Normaliser le nom de colonne_time(dt):
+def to_paris_time(dt):
     """Convertit datetime en timezone Paris"""
     if dt is None:
         return None
@@ -37,6 +31,10 @@ def     # Conversion en DataFrame
     if dt.tzinfo is None:
         dt = pytz.UTC.localize(dt)
     return dt.astimezone(PARIS_TZ)
+
+def now_paris():
+    """Retourne l'heure actuelle Paris"""
+    return datetime.now(PARIS_TZ)
 
 def now_paris():
     """Retourne l'heure actuelle Paris"""
