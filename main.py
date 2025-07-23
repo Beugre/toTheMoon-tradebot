@@ -35,6 +35,101 @@ from trading_hours import (get_current_trading_session, get_hours_status_message
 from utils.database import TradingDatabase
 from utils.enhanced_sheets_logger import EnhancedSheetsLogger
 from utils.firebase_logger import firebase_logger  # type: ignore
+
+# === TRADE VALIDATOR INTEGRATION ===
+class TradeValidator:
+    """Validateur pour détecter et bloquer les trades aberrants"""
+    
+    def __init__(self, max_loss_threshold=100, max_loss_percentage=0.02):
+        self.max_loss_threshold = max_loss_threshold
+        self.max_loss_percentage = max_loss_percentage
+    
+    def validate_trade_data(self, trade_data):
+        """Valide les données d'un trade avant enregistrement"""
+        errors = []
+        warnings = []
+        
+        # Validation des champs obligatoires
+        required_fields = ['pair', 'pnl_amount', 'capital_before', 'capital_after']
+        for field in required_fields:
+            if field not in trade_data or trade_data[field] is None:
+                errors.append(f"Champ obligatoire manquant: {field}")
+        
+        if errors:
+            return False, errors, warnings
+        
+        # Validation des valeurs
+        pnl = trade_data['pnl_amount']
+        capital_before = trade_data['capital_before']
+        capital_after = trade_data['capital_after']
+        
+        # 1. Vérifier cohérence capital_before + pnl = capital_after
+        expected_capital_after = capital_before + pnl
+        diff = abs(capital_after - expected_capital_after)
+        if diff > 0.01:  # Tolérance de 1 centime
+            errors.append(f"Incohérence capital: {capital_before:.2f} + {pnl:.2f} ≠ {capital_after:.2f} (diff: {diff:.6f})")
+        
+        # 2. Vérifier seuils de perte
+        if pnl < -self.max_loss_threshold:
+            errors.append(f"Perte excessive: {pnl:.2f} USDC > seuil {self.max_loss_threshold} USDC")
+        
+        # 3. Vérifier pourcentage de perte
+        if capital_before > 0:
+            loss_percentage = abs(pnl) / capital_before
+            if pnl < 0 and loss_percentage > self.max_loss_percentage:
+                errors.append(f"Perte % excessive: {loss_percentage*100:.2f}% > seuil {self.max_loss_percentage*100:.2f}%")
+        
+        # 4. Vérifier valeurs positives
+        if capital_before <= 0:
+            errors.append(f"Capital_before invalide: {capital_before}")
+        if capital_after <= 0:
+            errors.append(f"Capital_after invalide: {capital_after}")
+        
+        # Warnings
+        if abs(pnl) > 50:
+            warnings.append(f"P&L élevé: {pnl:.2f} USDC")
+        
+        return len(errors) == 0, errors, warnings
+    
+    def safe_log_trade(self, firebase_logger, trade_data):
+        """Log un trade de manière sécurisée avec validation"""
+        is_valid, errors, warnings = self.validate_trade_data(trade_data)
+        
+        if warnings:
+            print(f"⚠️ TRADE WARNING - {trade_data.get('pair')}: {', '.join(warnings)}")
+        
+        if not is_valid:
+            # Sauvegarder dans une collection séparée
+            quarantine_data = {
+                **trade_data,
+                'validation_errors': errors,
+                'validation_warnings': warnings,
+                'quarantine_timestamp': datetime.now().isoformat(),
+                'status': 'QUARANTINED'
+            }
+            
+            try:
+                if firebase_logger and firebase_logger.firestore_db:
+                    firebase_logger.firestore_db.collection('quarantined_trades').add(quarantine_data)
+                    print(f"🚨 TRADE ABERRANT DÉTECTÉ - {trade_data.get('pair')}: {', '.join(errors)}")
+                    print(f"🔒 Trade mis en quarantaine pour investigation")
+            except Exception as e:
+                print(f"❌ Erreur quarantaine: {e}")
+            
+            return False
+        
+        # Trade valide - enregistrer normalement
+        try:
+            firebase_logger.log_trade(trade_data)
+            print(f"✅ Trade validé et enregistré: {trade_data.get('pair')} - P&L: {trade_data.get('pnl_amount', 0):.2f} USDC")
+            return True
+        except Exception as e:
+            print(f"❌ Erreur lors de l'enregistrement: {e}")
+            return False
+
+# Instance globale du validateur
+trade_validator = TradeValidator(max_loss_threshold=100, max_loss_percentage=0.02)
+
 from utils.logger import setup_logger
 from utils.risk_manager import RiskManager
 from utils.technical_indicators import TechnicalAnalyzer
@@ -1755,7 +1850,7 @@ class ScalpingBot:
                     'execution_source': 'binance_automatic',
                     'automatic_order_id': trade.stop_loss_order_id
                 }
-                self.firebase_logger.log_trade(trade_data)
+                trade_validator.safe_log_trade(self.firebase_logger, trade_data)
             
             # 🔥 Suppression de la position sauvegardée en Firebase
             try:
@@ -2719,7 +2814,7 @@ class ScalpingBot:
                         'pnl_gross': pnl_amount,
                         'pnl_net': pnl_amount  # À ajuster si vous avez des frais à déduire
                     }
-                    self.firebase_logger.log_trade(trade_data)
+                    trade_validator.safe_log_trade(self.firebase_logger, trade_data)
                 except Exception as e:
                     self.logger.error(f"❌ Erreur log Firebase fermeture: {e}")
             
@@ -2819,7 +2914,7 @@ class ScalpingBot:
                         'pnl_gross': pnl_amount,
                         'pnl_net': pnl_amount  # Pas de frais en fermeture virtuelle
                     }
-                    self.firebase_logger.log_trade(trade_data)
+                    trade_validator.safe_log_trade(self.firebase_logger, trade_data)
                 except Exception as e:
                     self.logger.error(f"❌ Erreur log Firebase fermeture virtuelle: {e}")
             
