@@ -1124,6 +1124,25 @@ class ScalpingBot:
                 
                 return
             
+            # 🚀 OPTIMISÉ: Vérification cassure AVANT calculs coûteux
+            current_price = float(self.binance_client.get_symbol_ticker(symbol=symbol)['price'])
+            if not self.check_breakout_confirmation(symbol, current_price):
+                self.logger.info(f"❌ Trade {symbol} refusé: Cassure non confirmée (prix: {current_price:.4f})")
+                
+                # Firebase logging pour cassure non confirmée
+                if self.firebase_logger:
+                    self.firebase_logger.log_message(
+                        level="WARNING",
+                        message=f"❌ CASSURE NON CONFIRMÉE: {symbol}",
+                        module="trade_execution",
+                        pair=symbol,
+                        additional_data={
+                            'current_price': current_price,
+                            'reason': 'breakout_not_confirmed'
+                        }
+                    )
+                return
+            
             # Informations d'allocation avant trade
             total_capital = self.get_total_capital()
             usdc_balance = self.get_asset_balance('USDC')
@@ -1159,11 +1178,7 @@ class ScalpingBot:
                     }
                 )
             
-            # Récupération du prix actuel
-            ticker = self.binance_client.get_symbol_ticker(symbol=symbol)
-            current_price = float(ticker['price'])
-            
-            # Calcul SL et TP
+            # Calcul SL et TP (current_price déjà récupéré lors de la vérification cassure)
             stop_loss = current_price * (1 - self.config.STOP_LOSS_PERCENT / 100)
             take_profit = current_price * (1 + self.config.TAKE_PROFIT_PERCENT / 100)
             trailing_stop = current_price * (1 + self.config.TRAILING_ACTIVATION_PERCENT / 100)
@@ -1225,24 +1240,6 @@ class ScalpingBot:
             
             # Capital avant trade (AVANT l'achat)
             capital_before_trade = self.get_total_capital()
-            
-            # OPTIMISÉ R2: Vérification confirmation de cassure
-            if not self.check_breakout_confirmation(symbol, current_price):
-                self.logger.info(f"❌ Trade {symbol} refusé: Cassure non confirmée")
-                
-                # Firebase logging pour cassure non confirmée
-                if self.firebase_logger:
-                    self.firebase_logger.log_message(
-                        level="WARNING",
-                        message=f"❌ CASSURE NON CONFIRMÉE: {symbol}",
-                        module="trade_execution",
-                        pair=symbol,
-                        additional_data={
-                            'current_price': current_price,
-                            'reason': 'breakout_not_confirmed'
-                        }
-                    )
-                return
             
             # Passage de l'ordre
             order = self.binance_client.order_market_buy(
