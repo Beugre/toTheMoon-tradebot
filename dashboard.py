@@ -36,10 +36,6 @@ def now_paris():
     """Retourne l'heure actuelle Paris"""
     return datetime.now(PARIS_TZ)
 
-def now_paris():
-    """Retourne l'heure actuelle Paris"""
-    return datetime.now(PARIS_TZ)
-
 # Configuration de la page
 st.set_page_config(
     page_title="🚀 ToTheMoon Bot Dashboard",
@@ -659,7 +655,6 @@ def show_analytics(db):
     # Conversion en DataFrame
     df_decisions = pd.DataFrame(pair_decisions)
     df_decisions['timestamp'] = pd.to_datetime(df_decisions['timestamp'])
-    df_decisions['timestamp_paris'] = df_decisions['timestamp'].apply(to_paris_time)
     
     # Les données sont déjà structurées correctement dans la nouvelle collection
     df_detailed = df_decisions.copy()
@@ -695,7 +690,7 @@ def show_analytics(db):
     with col1:
         # Filtre par période
         hours_back = st.selectbox("📅 Période", [1, 6, 12, 24, 48], index=2)
-        cutoff_time = now_paris() - timedelta(hours=hours_back)
+        cutoff_time = datetime.now() - timedelta(hours=hours_back)  # UTC naive comme Firebase
         df_filtered = df_detailed[df_detailed['timestamp'] >= cutoff_time]
     
     with col2:
