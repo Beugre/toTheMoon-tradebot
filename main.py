@@ -494,8 +494,16 @@ class ScalpingBot:
                     if signal:
                         await self.execute_trade(pair_info.pair, signal)
                 
-                # Gestion des positions ouvertes
-                await self.manage_open_positions()
+                # Gestion des positions ouvertes avec surveillance fréquente
+                if len(self.open_positions) > 0:
+                    # Surveillance rapide toutes les 5 secondes si positions ouvertes
+                    await self.manage_open_positions()
+                    
+                    # Surveillance intensive pour positions à risque
+                    await self.intensive_position_monitoring()
+                else:
+                    # Surveillance normale si pas de positions
+                    await self.manage_open_positions()
                 
                 # Enregistrement périodique des métriques (toutes les 10 itérations)
                 self.metrics_counter += 1
@@ -529,7 +537,12 @@ class ScalpingBot:
                     await self.check_market_volatility(top_pairs)
                 
                 # Pause avant le prochain scan
-                await asyncio.sleep(self.config.SCAN_INTERVAL)
+                if len(self.open_positions) > 0:
+                    # Scan plus fréquent avec positions ouvertes (5s au lieu de 60s)
+                    await asyncio.sleep(5)
+                else:
+                    # Scan normal sans positions
+                    await asyncio.sleep(self.config.SCAN_INTERVAL)
                 
             except Exception as e:
                 self.logger.error(f"❌ Erreur dans la boucle principale: {e}")
@@ -1124,6 +1137,25 @@ class ScalpingBot:
                 
                 return
             
+            # 🚀 PROTECTION VOLATILITÉ EXTRÊME
+            if volatility > 30.0:  # Protection contre volatilité > 30%
+                self.logger.warning(f"⚠️ VOLATILITÉ EXTRÊME {symbol}: {volatility:.2f}% > 30% - Trade refusé pour éviter gaps")
+                
+                # Firebase logging pour volatilité extrême
+                if self.firebase_logger:
+                    self.firebase_logger.log_message(
+                        level="WARNING",
+                        message=f"⚠️ VOLATILITÉ EXTRÊME: {symbol} - {volatility:.2f}%",
+                        module="risk_management",
+                        pair=symbol,
+                        additional_data={
+                            'volatility': volatility,
+                            'max_allowed': 30.0,
+                            'reason': 'extreme_volatility_gap_protection'
+                        }
+                    )
+                return
+            
             # 🚀 OPTIMISÉ: Vérification cassure AVANT calculs coûteux
             current_price = float(self.binance_client.get_symbol_ticker(symbol=symbol)['price'])
             if not self.check_breakout_confirmation(symbol, current_price):
@@ -1265,7 +1297,18 @@ class ScalpingBot:
             trade_id = f"{symbol}_{trade.id}_{int(datetime.now().timestamp())}"
             self.open_positions[trade_id] = trade
 
-            # 🔥 Sauvegarde immédiate en Firebase
+            # � CRÉATION D'ORDRES STOP LOSS AUTOMATIQUES BINANCE
+            try:
+                stop_loss_order_id = await self.create_automatic_stop_loss(trade, symbol, quantity)
+                if stop_loss_order_id:
+                    trade.stop_loss_order_id = stop_loss_order_id
+                    self.logger.info(f"🛑 Stop Loss automatique créé: {stop_loss_order_id}")
+                else:
+                    self.logger.warning(f"⚠️ Impossible de créer stop loss automatique pour {symbol}")
+            except Exception as e:
+                self.logger.error(f"❌ Erreur création stop loss automatique: {e}")
+
+            # �🔥 Sauvegarde immédiate en Firebase
             try:
                 if self.firebase_logger and self.firebase_logger.firebase_initialized and self.firebase_logger.firestore_db:
                     position_data = {
@@ -1460,6 +1503,322 @@ class ScalpingBot:
             
         except Exception as e:
             self.logger.error(f"❌ Erreur lors de l'exécution du trade {symbol}: {e}")
+
+    async def create_automatic_stop_loss(self, trade, symbol: str, quantity: float) -> Optional[str]:
+        """Crée un ordre stop loss automatique sur Binance"""
+        try:
+            # Calcul des prix pour l'ordre stop loss
+            stop_price = trade.stop_loss  # Prix de déclenchement
+            limit_price = stop_price * 0.995  # Prix limite légèrement en dessous (-0.5%)
+            
+            # Arrondir selon les règles de la paire
+            limit_price = self.round_price(symbol, limit_price)
+            stop_price = self.round_price(symbol, stop_price)
+            
+            # Vérification que la quantité est valide
+            quantity = self.round_quantity(symbol, quantity)
+            
+            self.logger.info(f"🛑 Création stop loss automatique {symbol}:")
+            self.logger.info(f"   📊 Quantité: {quantity:.8f}")
+            self.logger.info(f"   🎯 Prix stop: {stop_price:.4f} USDC")
+            self.logger.info(f"   💰 Prix limite: {limit_price:.4f} USDC")
+            
+            # Tentative avec ordre STOP_LOSS_LIMIT
+            try:
+                stop_order = self.binance_client.create_order(
+                    symbol=symbol,
+                    side='SELL',
+                    type='STOP_LOSS_LIMIT',
+                    timeInForce='GTC',
+                    quantity=quantity,
+                    price=limit_price,
+                    stopPrice=stop_price
+                )
+                
+                self.logger.info(f"✅ Stop Loss automatique créé: ID {stop_order['orderId']}")
+                return str(stop_order['orderId'])
+                
+            except Exception as e:
+                # Fallback: Tentative avec ordre OCO si STOP_LOSS_LIMIT échoue
+                if "not supported" in str(e).lower() or "invalid" in str(e).lower():
+                    self.logger.warning(f"⚠️ STOP_LOSS_LIMIT non supporté pour {symbol}, tentative OCO...")
+                    return await self.create_oco_order(trade, symbol, quantity)
+                else:
+                    raise e
+                    
+        except Exception as e:
+            self.logger.error(f"❌ Erreur création stop loss automatique pour {symbol}: {e}")
+            return None
+
+    async def create_oco_order(self, trade, symbol: str, quantity: float) -> Optional[str]:
+        """Crée un ordre OCO (One-Cancels-Other) comme alternative"""
+        try:
+            # Prix pour l'ordre OCO
+            stop_price = trade.stop_loss
+            stop_limit_price = stop_price * 0.995
+            take_profit_price = trade.take_profit
+            
+            # Arrondir les prix
+            stop_price = self.round_price(symbol, stop_price)
+            stop_limit_price = self.round_price(symbol, stop_limit_price)
+            take_profit_price = self.round_price(symbol, take_profit_price)
+            quantity = self.round_quantity(symbol, quantity)
+            
+            self.logger.info(f"🔄 Tentative OCO pour {symbol}")
+            
+            oco_order = self.binance_client.create_oco_order(
+                symbol=symbol,
+                side='SELL',
+                quantity=quantity,
+                price=take_profit_price,  # Take profit
+                stopPrice=stop_price,     # Stop loss trigger
+                stopLimitPrice=stop_limit_price,  # Stop limit
+                stopLimitTimeInForce='GTC'
+            )
+            
+            # Récupérer l'ID de l'ordre stop loss de l'OCO
+            for order in oco_order.get('orders', []):
+                if order.get('type') == 'STOP_LOSS_LIMIT':
+                    stop_loss_id = str(order['orderId'])
+                    self.logger.info(f"✅ OCO créé avec stop loss: ID {stop_loss_id}")
+                    return stop_loss_id
+            
+            return str(oco_order.get('orderListId', ''))
+            
+        except Exception as e:
+            self.logger.error(f"❌ OCO non supporté pour {symbol}: {e}")
+            return None
+
+    def round_price(self, symbol: str, price: float) -> float:
+        """Arrondit un prix selon les règles de la paire"""
+        try:
+            info = self.binance_client.get_symbol_info(symbol)
+            for filter_item in info['filters']: # type: ignore
+                if filter_item['filterType'] == 'PRICE_FILTER':
+                    tick_size = float(filter_item['tickSize'])
+                    precision = len(str(tick_size).split('.')[-1].rstrip('0'))
+                    return round(price, precision)
+            return round(price, 4)
+        except:
+            return round(price, 4)
+
+    async def cancel_automatic_stop_loss(self, trade, symbol: str):
+        """Annule un ordre stop loss automatique"""
+        try:
+            if hasattr(trade, 'stop_loss_order_id') and trade.stop_loss_order_id:
+                self.binance_client.cancel_order(
+                    symbol=symbol,
+                    orderId=int(trade.stop_loss_order_id)
+                )
+                self.logger.info(f"🗑️ Stop loss automatique annulé: {trade.stop_loss_order_id}")
+                trade.stop_loss_order_id = None
+                
+        except Exception as e:
+            # L'ordre peut déjà être exécuté ou annulé
+            self.logger.debug(f"⚠️ Impossible d'annuler stop loss {trade.stop_loss_order_id}: {e}")
+
+    async def check_automatic_order_execution(self, trade_id: str, trade) -> bool:
+        """Vérifie si un ordre automatique (SL/TP) a été exécuté par Binance et enregistre le trade"""
+        try:
+            if not hasattr(trade, 'stop_loss_order_id') or not trade.stop_loss_order_id:
+                return False
+            
+            # Vérifier le statut de l'ordre automatique
+            try:
+                order_status = self.binance_client.get_order(
+                    symbol=trade.pair,
+                    orderId=int(trade.stop_loss_order_id)
+                )
+                
+                # Si l'ordre est rempli (FILLED), la position a été fermée automatiquement
+                if order_status['status'] == 'FILLED':
+                    executed_price = float(order_status['price']) if order_status.get('price') else float(order_status.get('avgPrice', 0))
+                    executed_qty = float(order_status['executedQty'])
+                    executed_time = order_status.get('updateTime', int(datetime.now().timestamp() * 1000))
+                    
+                    # Déterminer la raison de fermeture
+                    if executed_price <= trade.stop_loss * 1.01:  # Tolérance 1%
+                        reason = "STOP_LOSS_BINANCE_AUTO"
+                    else:
+                        reason = "TAKE_PROFIT_BINANCE_AUTO"
+                    
+                    self.logger.info(f"🤖 Ordre automatique Binance exécuté:")
+                    self.logger.info(f"   📊 {trade.pair}: {executed_qty:.8f} à {executed_price:.4f} USDC")
+                    self.logger.info(f"   🎯 Raison: {reason}")
+                    self.logger.info(f"   🕐 Heure: {datetime.fromtimestamp(executed_time/1000)}")
+                    
+                    # Enregistrer la fermeture de trade avec les données Binance
+                    await self.record_automatic_trade_closure(trade_id, trade, executed_price, reason, executed_time)
+                    
+                    return True
+                    
+            except Exception as e:
+                # Si l'ordre n'existe plus, il a peut-être été exécuté
+                if "does not exist" in str(e).lower() or "not found" in str(e).lower():
+                    self.logger.warning(f"⚠️ Ordre {trade.stop_loss_order_id} introuvable - possiblement exécuté")
+                    # Essayer de détecter via l'historique des trades récents
+                    await self.detect_missing_execution(trade_id, trade)
+                    return True
+                else:
+                    self.logger.debug(f"❌ Erreur vérification ordre {trade.stop_loss_order_id}: {e}")
+            
+            return False
+            
+        except Exception as e:
+            self.logger.error(f"❌ Erreur vérification ordre automatique {trade_id}: {e}")
+            return False
+
+    async def record_automatic_trade_closure(self, trade_id: str, trade, exit_price: float, reason: str, executed_time: int):
+        """Enregistre la fermeture automatique d'un trade par Binance"""
+        try:
+            # Mise à jour du trade
+            trade.status = TradeStatus.CLOSED
+            trade.exit_price = exit_price
+            trade.exit_timestamp = datetime.fromtimestamp(executed_time / 1000)
+            trade.duration = trade.exit_timestamp - trade.timestamp
+            trade.exit_reason = reason
+            
+            # Calcul P&L
+            capital_after_trade = self.get_total_capital()
+            theoretical_pnl = (exit_price - trade.entry_price) * trade.size
+            theoretical_pnl_percent = (exit_price - trade.entry_price) / trade.entry_price * 100
+            
+            # Utilisation du P&L réel si capital_before disponible
+            if trade.capital_before is not None:
+                real_pnl = capital_after_trade - trade.capital_before
+                trade.capital_after = capital_after_trade
+                trade.pnl = real_pnl
+                pnl_amount = real_pnl
+                pnl_percent = theoretical_pnl_percent
+                
+                self.logger.info(f"💰 P&L Réel (auto): {real_pnl:+.4f} USDC ({theoretical_pnl_percent:+.3f}%)")
+            else:
+                trade.pnl = theoretical_pnl
+                pnl_amount = theoretical_pnl
+                pnl_percent = theoretical_pnl_percent
+                self.logger.info(f"💰 P&L théorique (auto): {theoretical_pnl:+.4f} USDC ({theoretical_pnl_percent:+.2f}%)")
+            
+            # Mise à jour des compteurs
+            is_profit = pnl_amount > 0
+            self.update_trade_result(is_profit)
+            self.current_capital += (trade.entry_price * trade.size) + pnl_amount
+            self.daily_pnl += pnl_amount
+            self.daily_trades += 1
+            
+            # Suppression de la position ouverte
+            if trade_id in self.open_positions:
+                del self.open_positions[trade_id]
+            
+            # 🔥 FIREBASE LOGGING POUR FERMETURE AUTOMATIQUE
+            if self.firebase_logger:
+                self.firebase_logger.log_message(
+                    level="INFO",
+                    message=f"🤖 TRADE FERMÉ AUTOMATIQUEMENT: {trade.pair} - P&L: {pnl_amount:+.2f} USDC ({pnl_percent:+.2f}%)",
+                    module="binance_auto_execution",
+                    trade_id=trade_id,
+                    pair=trade.pair,
+                    capital=capital_after_trade,
+                    additional_data={
+                        'exit_price': exit_price,
+                        'exit_reason': reason,
+                        'pnl_amount': pnl_amount,
+                        'pnl_percent': pnl_percent,
+                        'duration_seconds': trade.duration.total_seconds() if trade.duration else 0,
+                        'daily_pnl': self.daily_pnl,
+                        'daily_trades': self.daily_trades,
+                        'execution_source': 'binance_automatic',
+                        'order_id': trade.stop_loss_order_id
+                    }
+                )
+                
+                # Log Firebase pour trade fermé automatiquement
+                trade_data = {
+                    'trade_id': trade_id,
+                    'pair': trade.pair,
+                    'direction': trade.direction.value,
+                    'size': trade.size,
+                    'entry_price': trade.entry_price,
+                    'exit_price': exit_price,
+                    'pnl_amount': pnl_amount,
+                    'pnl_percent': pnl_percent,
+                    'duration_seconds': trade.duration.total_seconds() if trade.duration else 0,
+                    'exit_reason': reason,
+                    'daily_pnl': self.daily_pnl,
+                    'total_capital': capital_after_trade,
+                    'stop_loss': trade.stop_loss,
+                    'take_profit': trade.take_profit,
+                    'capital_before': trade.capital_before,
+                    'capital_after': capital_after_trade,
+                    'execution_source': 'binance_automatic',
+                    'automatic_order_id': trade.stop_loss_order_id
+                }
+                self.firebase_logger.log_trade(trade_data)
+            
+            # 🔥 Suppression de la position sauvegardée en Firebase
+            try:
+                if self.firebase_logger and self.firebase_logger.firebase_initialized and self.firebase_logger.firestore_db:
+                    self.firebase_logger.firestore_db.collection('position_states').document(trade_id).delete()
+                    self.logger.debug(f"🔥 Position {trade_id} supprimée de Firebase")
+            except Exception as e:
+                self.logger.error(f"❌ Erreur suppression position Firebase {trade_id}: {e}")
+            
+            # Logging détaillé
+            pnl_symbol = "🚀" if pnl_amount > 0 else "📉"
+            self.logger.info(f"{pnl_symbol} Trade fermé automatiquement : {trade.pair} ({reason})")
+            self.logger.info(f"   💰 Prix de sortie: {exit_price:.4f} USDC")
+            self.logger.info(f"   📊 P&L: {pnl_amount:+.2f} USDC ({pnl_percent:+.2f}%)")
+            self.logger.info(f"   ⏱️ Durée: {trade.duration}")
+            self.logger.info(f"   🤖 Exécution: Binance automatique")
+            total_capital = self.get_total_capital()
+            daily_pnl_percent = self.daily_pnl / total_capital * 100
+            self.logger.info(f"   🔄 Total journalier: {self.daily_pnl:+.2f} USDC ({daily_pnl_percent:+.2f}%)")
+            
+            # Notification Telegram
+            await self.telegram_notifier.send_trade_close_notification(trade, pnl_amount, pnl_percent, self.daily_pnl, total_capital)
+            
+            # Log dans Google Sheets (si activé)
+            if self.sheets_logger:
+                capital_before_close = total_capital - pnl_amount
+                await self.sheets_logger.log_trade(trade, "CLOSE_AUTO", capital_before_close, total_capital)
+            
+        except Exception as e:
+            self.logger.error(f"❌ Erreur enregistrement fermeture automatique {trade_id}: {e}")
+
+    async def detect_missing_execution(self, trade_id: str, trade):
+        """Détecte une exécution manquée via l'historique des trades"""
+        try:
+            # Récupérer l'historique récent des trades
+            recent_trades = self.binance_client.get_my_trades(symbol=trade.pair, limit=50)
+            
+            # Chercher un trade de vente correspondant à notre position
+            for binance_trade in recent_trades:
+                trade_time = datetime.fromtimestamp(binance_trade['time'] / 1000)
+                
+                # Si le trade est récent (dernières 10 minutes) et c'est une vente
+                if (datetime.now() - trade_time).total_seconds() < 600 and binance_trade['isBuyer'] == False:
+                    executed_price = float(binance_trade['price'])
+                    executed_qty = float(binance_trade['qty'])
+                    
+                    # Si la quantité correspond approximativement
+                    if abs(executed_qty - trade.size) / trade.size < 0.05:  # 5% de tolérance
+                        reason = "STOP_LOSS_BINANCE_AUTO" if executed_price <= trade.stop_loss * 1.01 else "TAKE_PROFIT_BINANCE_AUTO"
+                        
+                        self.logger.info(f"🔍 Exécution automatique détectée via historique:")
+                        self.logger.info(f"   📊 {trade.pair}: {executed_qty:.8f} à {executed_price:.4f} USDC")
+                        self.logger.info(f"   🕐 Heure: {trade_time}")
+                        
+                        await self.record_automatic_trade_closure(trade_id, trade, executed_price, reason, binance_trade['time'])
+                        return True
+            
+            # Si aucune exécution trouvée, fermeture virtuelle par sécurité
+            self.logger.warning(f"⚠️ Aucune exécution automatique trouvée pour {trade.pair}, fermeture virtuelle")
+            current_price = float(self.binance_client.get_symbol_ticker(symbol=trade.pair)['price'])
+            await self.record_automatic_trade_closure(trade_id, trade, current_price, "BINANCE_AUTO_UNKNOWN", int(datetime.now().timestamp() * 1000))
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"❌ Erreur détection exécution manquée {trade_id}: {e}")
+            return False
 
     def get_non_dust_trades_on_pair(self, symbol: str) -> int:
         """Compte le nombre de trades non-miettes sur une paire"""
@@ -1736,6 +2095,13 @@ class ScalpingBot:
         """Gère les positions ouvertes et la surexposition"""
         for trade_id, trade in list(self.open_positions.items()):
             try:
+                # 🚨 NOUVEAU: Vérification si un ordre automatique a été exécuté par Binance
+                if hasattr(trade, 'stop_loss_order_id') and trade.stop_loss_order_id:
+                    executed = await self.check_automatic_order_execution(trade_id, trade)
+                    # Si le trade a été fermé automatiquement, passer au suivant
+                    if executed or trade_id not in self.open_positions:
+                        continue
+                
                 # Récupération du prix actuel
                 ticker = self.binance_client.get_symbol_ticker(symbol=trade.pair)
                 current_price = float(ticker['price'])
@@ -1768,8 +2134,34 @@ class ScalpingBot:
                         await self.close_position(trade_id, current_price, "MOMENTUM_FAIBLE")
                         continue
 
-                # Vérification Stop Loss
+                # Vérification Stop Loss avec protection gap
                 if current_price <= trade.stop_loss:
+                    # Analyse du gap de marché
+                    expected_loss = abs((trade.stop_loss - trade.entry_price) / trade.entry_price * 100)
+                    actual_loss = abs((current_price - trade.entry_price) / trade.entry_price * 100)
+                    gap_excess = actual_loss - expected_loss
+                    
+                    if gap_excess > 0.5:  # Gap significatif détecté
+                        self.logger.error(f"🚨 GAP STOP LOSS {trade.pair}: Perte {actual_loss:.2f}% vs {expected_loss:.2f}% attendu (gap: {gap_excess:.2f}%)")
+                        
+                        # Firebase logging pour analyse des gaps
+                        if self.firebase_logger:
+                            self.firebase_logger.log_message(
+                                level="ERROR",
+                                message=f"🚨 GAP STOP LOSS: {trade.pair} - Gap: {gap_excess:.2f}%",
+                                module="risk_management",
+                                pair=trade.pair,
+                                additional_data={
+                                    'entry_price': trade.entry_price,
+                                    'configured_stop_loss': trade.stop_loss,
+                                    'actual_exit_price': current_price,
+                                    'expected_loss_percent': expected_loss,
+                                    'actual_loss_percent': actual_loss,
+                                    'gap_excess_percent': gap_excess,
+                                    'trade_duration': str(datetime.now() - trade.timestamp)
+                                }
+                            )
+                    
                     await self.close_position(trade_id, current_price, "STOP_LOSS")
                     continue
 
@@ -1782,9 +2174,9 @@ class ScalpingBot:
                         trailing_activated = True
                         old_stop = trade.stop_loss
                         old_tp = trade.take_profit
-                        trailing_activated = True
-                        old_stop = trade.stop_loss
-                        old_tp = trade.take_profit
+                        
+                        # Annuler l'ancien stop loss automatique
+                        await self.cancel_automatic_stop_loss(trade, trade.pair)
                         
                         # Mise à jour du Stop Loss
                         trade.stop_loss = new_stop
@@ -1793,6 +2185,14 @@ class ScalpingBot:
                         # Nouveau TP = prix actuel + même écart relatif que le TP initial
                         new_take_profit = current_price * (1 + self.config.TAKE_PROFIT_PERCENT / 100)
                         trade.take_profit = new_take_profit
+                        
+                        # Créer nouveau stop loss automatique avec nouveau niveau
+                        try:
+                            new_stop_order_id = await self.create_automatic_stop_loss(trade, trade.pair, trade.size)
+                            if new_stop_order_id:
+                                trade.stop_loss_order_id = new_stop_order_id
+                        except Exception as e:
+                            self.logger.error(f"❌ Erreur création nouveau stop loss automatique: {e}")
                         
                         self.logger.info(f"📈 Trailing Stop mis à jour pour {trade.pair}:")
                         self.logger.info(f"   🛑 Nouveau SL: {new_stop:.4f} USDC (ancien: {old_stop:.4f})")
@@ -1814,7 +2214,193 @@ class ScalpingBot:
                                     'new_take_profit': new_take_profit,
                                     'trigger_price': current_price,
                                     'profit_percent': profit_percent,
-                                    'entry_price': trade.entry_price
+                                    'entry_price': trade.entry_price,
+                                    'new_stop_order_id': trade.stop_loss_order_id
+                                }
+                            )
+
+                        # Enregistrement en base de données
+                        try:
+                            trailing_data = {
+                                'trade_id': trade.db_id,
+                                'symbol': trade.pair,
+                                'old_stop_loss': old_stop,
+                                'new_stop_loss': new_stop,
+                                'old_take_profit': old_tp,
+                                'new_take_profit': new_take_profit,
+                                'trigger_price': current_price,
+                                'timestamp': datetime.now(),
+                                'profit_percent': (current_price - trade.entry_price) / trade.entry_price * 100
+                            }
+                            await self.database.insert_trailing_stop(trailing_data)
+                        except Exception as e:
+                            self.logger.error(f"❌ Erreur enregistrement trailing stop: {e}")
+
+                # Vérification Take Profit (seulement si trailing stop pas activé)
+                if not trailing_activated and current_price >= trade.take_profit:
+                    await self.close_position(trade_id, current_price, "TAKE_PROFIT")
+                    continue
+
+            except Exception as e:
+                self.logger.error(f"❌ Erreur gestion position {trade_id}: {e}")
+
+    async def intensive_position_monitoring(self):
+        """Surveillance intensive des positions à risque avec détection de gaps rapide"""
+        try:
+            for trade_id, trade in list(self.open_positions.items()):
+                try:
+                    # Récupération prix en temps réel
+                    ticker = self.binance_client.get_symbol_ticker(symbol=trade.pair)
+                    current_price = float(ticker['price'])
+                    
+                    # Calcul distance au stop loss
+                    distance_to_stop = (current_price - trade.stop_loss) / trade.stop_loss * 100
+                    
+                    # Surveillance intensive si proche du stop loss
+                    if distance_to_stop < 1.0:  # Moins de 1% du stop loss
+                        self.logger.warning(f"⚠️ SURVEILLANCE INTENSIVE {trade.pair}: Prix {current_price:.4f} très proche du SL {trade.stop_loss:.4f} ({distance_to_stop:.2f}%)")
+                        
+                        # Vérification gap imminent
+                        if current_price <= trade.stop_loss:
+                            # Exécution immédiate pour éviter gap plus important
+                            await self.close_position(trade_id, current_price, "STOP_LOSS_IMMEDIATE")
+                            continue
+                    
+                    # Surveillance des mouvements rapides (volatilité excessive)
+                    volatility = self.calculate_volatility_1h(trade.pair)
+                    if volatility > 50.0:  # Volatilité extrême
+                        pnl_percent = (current_price - trade.entry_price) / trade.entry_price * 100
+                        
+                        # Sortie préventive si volatilité dangereuse et perte modérée
+                        if pnl_percent < -0.2 and volatility > 100.0:  # Perte > 0.2% et volatilité > 100%
+                            self.logger.warning(f"🚨 SORTIE PRÉVENTIVE {trade.pair}: Volatilité extrême {volatility:.1f}% + perte {pnl_percent:.2f}%")
+                            await self.close_position(trade_id, current_price, "VOLATILITY_PROTECTION")
+                            continue
+                    
+                except Exception as e:
+                    self.logger.error(f"❌ Erreur surveillance intensive {trade_id}: {e}")
+                    
+        except Exception as e:
+            self.logger.error(f"❌ Erreur surveillance intensive générale: {e}")
+
+    async def manage_open_positions(self):
+        """Gère les positions ouvertes et la surexposition"""
+        for trade_id, trade in list(self.open_positions.items()):
+            try:
+                # Récupération du prix actuel
+                ticker = self.binance_client.get_symbol_ticker(symbol=trade.pair)
+                current_price = float(ticker['price'])
+
+                # Calcul du P&L
+                pnl_percent = (current_price - trade.entry_price) / trade.entry_price * 100
+
+                # Vérification surexposition dynamique
+                base_asset = trade.pair.replace('USDC', '')
+                current_exposure = self.get_asset_exposure(base_asset)
+                max_exposure_per_asset = self.get_total_capital() * self.config.MAX_EXPOSURE_PER_ASSET_PERCENT / 100
+                if current_exposure > max_exposure_per_asset * 1.01:  # tolérance 1%
+                    self.logger.warning(f"⚠️ Surexposition détectée sur {base_asset}: {current_exposure:.2f} USDC > {max_exposure_per_asset:.2f} USDC ({self.config.MAX_EXPOSURE_PER_ASSET_PERCENT}% du capital)")
+                    await self.close_position(trade_id, current_price, "SUREXPOSITION_AUTO")
+                    continue
+
+                # Vérification timeout adaptatif
+                volatility = self.calculate_volatility_1h(trade.pair)
+                should_timeout, timeout_reason = self.should_timeout_position(trade, current_price, volatility)
+                if should_timeout:
+                    self.logger.info(f"⏱️ {timeout_reason}")
+                    await self.close_position(trade_id, current_price, timeout_reason)
+                    continue
+
+                # Sortie momentum faible (optionnelle)
+                if self.config.ENABLE_MOMENTUM_EXIT:
+                    should_exit_momentum, momentum_reason = await self.check_momentum_exit(trade, current_price, pnl_percent)
+                    if should_exit_momentum:
+                        self.logger.info(f"📉 {momentum_reason}")
+                        await self.close_position(trade_id, current_price, "MOMENTUM_FAIBLE")
+                        continue
+
+                # Vérification Stop Loss avec protection gap
+                if current_price <= trade.stop_loss:
+                    # Analyse du gap de marché
+                    expected_loss = abs((trade.stop_loss - trade.entry_price) / trade.entry_price * 100)
+                    actual_loss = abs((current_price - trade.entry_price) / trade.entry_price * 100)
+                    gap_excess = actual_loss - expected_loss
+                    
+                    if gap_excess > 0.5:  # Gap significatif détecté
+                        self.logger.error(f"🚨 GAP STOP LOSS {trade.pair}: Perte {actual_loss:.2f}% vs {expected_loss:.2f}% attendu (gap: {gap_excess:.2f}%)")
+                        
+                        # Firebase logging pour analyse des gaps
+                        if self.firebase_logger:
+                            self.firebase_logger.log_message(
+                                level="ERROR",
+                                message=f"🚨 GAP STOP LOSS: {trade.pair} - Gap: {gap_excess:.2f}%",
+                                module="risk_management",
+                                pair=trade.pair,
+                                additional_data={
+                                    'entry_price': trade.entry_price,
+                                    'configured_stop_loss': trade.stop_loss,
+                                    'actual_exit_price': current_price,
+                                    'expected_loss_percent': expected_loss,
+                                    'actual_loss_percent': actual_loss,
+                                    'gap_excess_percent': gap_excess,
+                                    'trade_duration': str(datetime.now() - trade.timestamp)
+                                }
+                            )
+                    
+                    await self.close_position(trade_id, current_price, "STOP_LOSS")
+                    continue
+
+                # Trailing Stop (priorité sur Take Profit pour laisser monter)
+                trailing_activated = False
+                if current_price >= trade.trailing_stop:
+                    # Mise à jour du trailing stop
+                    new_stop = current_price * (1 - self.config.TRAILING_STEP_PERCENT / 100)
+                    if new_stop > trade.stop_loss:
+                        trailing_activated = True
+                        old_stop = trade.stop_loss
+                        old_tp = trade.take_profit
+                        
+                        # Annuler l'ancien stop loss automatique
+                        await self.cancel_automatic_stop_loss(trade, trade.pair)
+                        
+                        # Mise à jour du Stop Loss
+                        trade.stop_loss = new_stop
+                        
+                        # Mise à jour du Take Profit pour qu'il suive la progression
+                        # Nouveau TP = prix actuel + même écart relatif que le TP initial
+                        new_take_profit = current_price * (1 + self.config.TAKE_PROFIT_PERCENT / 100)
+                        trade.take_profit = new_take_profit
+                        
+                        # Créer nouveau stop loss automatique avec nouveau niveau
+                        try:
+                            new_stop_order_id = await self.create_automatic_stop_loss(trade, trade.pair, trade.size)
+                            if new_stop_order_id:
+                                trade.stop_loss_order_id = new_stop_order_id
+                        except Exception as e:
+                            self.logger.error(f"❌ Erreur création nouveau stop loss automatique: {e}")
+                        
+                        self.logger.info(f"📈 Trailing Stop mis à jour pour {trade.pair}:")
+                        self.logger.info(f"   🛑 Nouveau SL: {new_stop:.4f} USDC (ancien: {old_stop:.4f})")
+                        self.logger.info(f"   🎯 Nouveau TP: {new_take_profit:.4f} USDC (ancien: {old_tp:.4f})")
+                        
+                        # Firebase logging pour trailing stop
+                        if self.firebase_logger:
+                            profit_percent = (current_price - trade.entry_price) / trade.entry_price * 100
+                            self.firebase_logger.log_message(
+                                level="INFO",
+                                message=f"📈 TRAILING STOP: {trade.pair} - SL: {new_stop:.4f} (+{profit_percent:.2f}%)",
+                                module="position_management",
+                                trade_id=trade_id,
+                                pair=trade.pair,
+                                additional_data={
+                                    'old_stop_loss': old_stop,
+                                    'new_stop_loss': new_stop,
+                                    'old_take_profit': old_tp,
+                                    'new_take_profit': new_take_profit,
+                                    'trigger_price': current_price,
+                                    'profit_percent': profit_percent,
+                                    'entry_price': trade.entry_price,
+                                    'new_stop_order_id': trade.stop_loss_order_id
                                 }
                             )
 
@@ -1849,6 +2435,9 @@ class ScalpingBot:
             trade = self.open_positions[trade_id]
             symbol = trade.pair
             
+            # Annuler l'ordre stop loss automatique s'il existe
+            await self.cancel_automatic_stop_loss(trade, symbol)
+            
             # Récupération de l'asset de base (ex: ETH pour ETHUSDC)
             base_asset = symbol.replace('USDC', '')
             
@@ -1878,24 +2467,6 @@ class ScalpingBot:
                     
                     # Vérification que la quantité ajustée est valide
                     if quantity_to_sell <= 0:
-                        self.logger.error(f"❌ Quantité ajustée invalide pour {symbol}, fermeture virtuelle")
-                        await self.close_position_virtually(symbol, exit_price, f"{reason}_INVALID_QTY")
-                        return
-                else:
-                    self.logger.error(f"❌ Aucun solde utilisable pour {symbol}, position fermée virtuellement")
-                    await self.close_position_virtually(symbol, exit_price, f"{reason}_NO_BALANCE")
-                    return
-            
-            # Validation finale de la quantité
-            is_valid, validation_msg, adjusted_quantity = self.validate_order_quantity(symbol, quantity_to_sell, exit_price)
-            
-            if not is_valid:
-                self.logger.warning(f"⚠️ Quantité de vente invalide: {validation_msg}")
-                if adjusted_quantity > 0 and adjusted_quantity <= available_balance:
-                    quantity_to_sell = adjusted_quantity
-                    self.logger.info(f"🔧 Quantité de vente ajustée: {quantity_to_sell:.8f}")
-                else:
-                    self.logger.error(f"❌ Impossible de vendre {symbol}, fermeture virtuelle")
                     await self.close_position_virtually(symbol, exit_price, reason)
                     return
             
