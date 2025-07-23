@@ -213,10 +213,11 @@ def show_overview(db):
         if len(df_recent) > 0:
             df_recent['real_pnl'] = df_recent['capital_after'] - df_recent['capital_before']
             df_recent['timestamp'] = pd.to_datetime(df_recent['timestamp'])
+            df_recent['timestamp_paris'] = df_recent['timestamp'].apply(to_paris_time)
             
-            display_recent = df_recent[['pair', 'real_pnl', 'capital_after', 'timestamp']].copy()
+            display_recent = df_recent[['pair', 'real_pnl', 'capital_after', 'timestamp_paris']].copy()
             display_recent['P&L'] = display_recent['real_pnl'].apply(lambda x: f"{x:+.4f}")
-            display_recent['Heure'] = display_recent['timestamp'].dt.strftime('%H:%M:%S')
+            display_recent['Heure'] = display_recent['timestamp_paris'].dt.strftime('%H:%M:%S')
             display_recent = display_recent[['pair', 'P&L', 'capital_after', 'Heure']]
             display_recent.columns = ['Paire', 'P&L', 'Capital Après', 'Heure']
             
@@ -358,16 +359,18 @@ def show_performance(db):
             st.subheader("🏆 Top 5 Meilleurs Trades")
             if len(df_pnl) > 0:
                 top_trades = df_pnl.nlargest(5, 'real_pnl')[['pair', 'real_pnl', 'timestamp']].copy()
+                top_trades['timestamp_paris'] = top_trades['timestamp'].apply(to_paris_time)
                 top_trades['P&L'] = top_trades['real_pnl'].apply(lambda x: f"{x:+.4f}")
-                top_trades['Heure'] = top_trades['timestamp'].dt.strftime('%H:%M')
+                top_trades['Heure'] = top_trades['timestamp_paris'].dt.strftime('%H:%M')
                 st.dataframe(top_trades[['pair', 'P&L', 'Heure']], use_container_width=True)
         
         with col2:
             st.subheader("💥 Top 5 Pires Trades")
             if len(df_pnl) > 0:
                 worst_trades = df_pnl.nsmallest(5, 'real_pnl')[['pair', 'real_pnl', 'timestamp']].copy()
+                worst_trades['timestamp_paris'] = worst_trades['timestamp'].apply(to_paris_time)
                 worst_trades['P&L'] = worst_trades['real_pnl'].apply(lambda x: f"{x:+.4f}")
-                worst_trades['Heure'] = worst_trades['timestamp'].dt.strftime('%H:%M')
+                worst_trades['Heure'] = worst_trades['timestamp_paris'].dt.strftime('%H:%M')
                 st.dataframe(worst_trades[['pair', 'P&L', 'Heure']], use_container_width=True)
         
         # === ANALYSE TEMPORELLE ===
@@ -488,7 +491,8 @@ def show_logs(db):
         
         # Affichage
         for _, log in df_filtered.head(50).iterrows():
-            timestamp = log['timestamp'].strftime("%H:%M:%S")
+            timestamp_paris = to_paris_time(log['timestamp'])
+            timestamp = timestamp_paris.strftime("%H:%M:%S")
             level = log.get('level', 'INFO')
             message = log.get('message', 'N/A')
             
