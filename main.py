@@ -68,6 +68,8 @@ class Trade:
     pnl: float = 0.0
     duration: Optional[timedelta] = None
     exit_reason: str = ""
+    capital_before: Optional[float] = None  # AJOUTÉ: Capital avant le trade
+    capital_after: Optional[float] = None   # AJOUTÉ: Capital après le trade
     db_id: Optional[int] = None
 
 @dataclass
@@ -1166,6 +1168,13 @@ class ScalpingBot:
             take_profit = current_price * (1 + self.config.TAKE_PROFIT_PERCENT / 100)
             trailing_stop = current_price * (1 + self.config.TRAILING_ACTIVATION_PERCENT / 100)
             
+            # Log des niveaux de sortie incluant trailing stop
+            self.logger.info(f"🎯 Niveaux de sortie pour {symbol}:")
+            self.logger.info(f"   🛑 Stop Loss: {stop_loss:.4f} USDC (-{self.config.STOP_LOSS_PERCENT}%)")
+            self.logger.info(f"   🎯 Take Profit: {take_profit:.4f} USDC (+{self.config.TAKE_PROFIT_PERCENT}%)")
+            self.logger.info(f"   📈 Trailing activation: {trailing_stop:.4f} USDC (+{self.config.TRAILING_ACTIVATION_PERCENT}%)")
+            self.logger.info(f"   🔄 Trailing step: {self.config.TRAILING_STEP_PERCENT}%")
+            
             # Calcul de la quantité
             quantity = position_size / current_price
             
@@ -1241,7 +1250,7 @@ class ScalpingBot:
                 quantity=quantity
             )
             
-            # Création du trade
+            # Création du trade avec capital_before
             trade = Trade(
                 id=order['orderId'],
                 pair=symbol,
@@ -1251,7 +1260,8 @@ class ScalpingBot:
                 stop_loss=stop_loss,
                 take_profit=take_profit,
                 trailing_stop=trailing_stop,
-                timestamp=datetime.now()
+                timestamp=datetime.now(),
+                capital_before=capital_before_trade  # AJOUTÉ: Stocker le capital avant trade
             )
             
             # Ajout aux positions ouvertes avec ID unique
@@ -1324,7 +1334,7 @@ class ScalpingBot:
                 
                 self.firebase_logger.log_message(
                     level="INFO",
-                    message=f"📈 TRADE OUVERT: {symbol} - Prix: {current_price:.4f}",
+                    message=f"📈 TRADE OUVERT: {symbol} - Prix: {current_price:.4f} (Trailing: {trailing_stop:.4f})",
                     module="trade_execution",
                     trade_id=trade_id,
                     pair=symbol,
@@ -1335,6 +1345,9 @@ class ScalpingBot:
                         'quantity': quantity,
                         'stop_loss': stop_loss,
                         'take_profit': take_profit,
+                        'trailing_stop': trailing_stop,
+                        'trailing_activation_percent': self.config.TRAILING_ACTIVATION_PERCENT,
+                        'trailing_step_percent': self.config.TRAILING_STEP_PERCENT,
                         'position_size': position_size,
                         'volatility_1h': volatility_1h,
                         'volatility_24h': abs(price_change_24h),
@@ -1940,10 +1953,34 @@ class ScalpingBot:
             trade.duration = trade.exit_timestamp - trade.timestamp
             trade.exit_reason = reason
             
-            # Calcul P&L
-            pnl_amount = (exit_price - trade.entry_price) * trade.size
-            pnl_percent = (exit_price - trade.entry_price) / trade.entry_price * 100
-            trade.pnl = pnl_amount
+            # CORRIGÉ: Calcul P&L réel basé sur la différence de capital
+            capital_after_trade = self.get_total_capital()
+            
+            # Calcul théorique pour comparaison
+            theoretical_pnl = (exit_price - trade.entry_price) * trade.size
+            theoretical_pnl_percent = (exit_price - trade.entry_price) / trade.entry_price * 100
+            
+            # Utilisation du P&L réel si capital_before disponible
+            if trade.capital_before is not None:
+                real_pnl = capital_after_trade - trade.capital_before
+                real_pnl_percent = (real_pnl / trade.capital_before) * 100
+                
+                # Mise à jour du trade avec le capital après et P&L réel
+                trade.capital_after = capital_after_trade
+                trade.pnl = real_pnl
+                pnl_amount = real_pnl
+                pnl_percent = real_pnl_percent
+                
+                self.logger.info(f"💰 P&L Réel: {real_pnl:+.4f} USDC ({real_pnl_percent:+.3f}%)")
+                self.logger.debug(f"🧮 P&L Théorique: {theoretical_pnl:+.4f} USDC ({theoretical_pnl_percent:+.3f}%)")
+                self.logger.debug(f"📊 Différence: {real_pnl - theoretical_pnl:+.4f} USDC ({real_pnl_percent - theoretical_pnl_percent:+.3f}%)")
+            else:
+                # Fallback sur calcul théorique si capital_before manquant
+                self.logger.warning(f"⚠️ Capital avant trade non disponible, utilisation du calcul théorique")
+                trade.pnl = theoretical_pnl
+                pnl_amount = theoretical_pnl
+                pnl_percent = theoretical_pnl_percent
+                self.logger.debug(f"🧮 P&L théorique: {theoretical_pnl:+.4f} USDC ({theoretical_pnl_percent:+.2f}%)")
             
             # OPTIMISÉ: Mise à jour du suivi des résultats
             is_profit = pnl_amount > 0

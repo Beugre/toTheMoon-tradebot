@@ -27,7 +27,7 @@ class TradingConfig:
     MAX_OPEN_POSITIONS: int = 3  # Moins de positions mais plus grosses
     MAX_TRADES_PER_PAIR: int = 1  # UN SEUL trade par paire max
     MAX_EXPOSURE_PER_ASSET_PERCENT: float = 30.0  # Exposition max par crypto (30% pour haute liquidité)
-    STOP_LOSS_PERCENT: float = 0.25  # SL plus serré pour limiter pertes
+    STOP_LOSS_PERCENT: float = 0.35  # SL plus serré pour limiter pertes
     TAKE_PROFIT_PERCENT: float = 1.2  # TP optimisé pour USDC haute liquidité
     TRAILING_ACTIVATION_PERCENT: float = 0.5  # OPTIMISÉ: Activation trailing à +0.5% (plus conservateur)
     TRAILING_STEP_PERCENT: float = 0.2  # Step trailing plus fin
@@ -44,14 +44,14 @@ class TradingConfig:
     MIN_PROFIT_BEFORE_TIMEOUT: float = 0.1  # Sortie plus rapide si petit profit
     
     # Paramètres de sélection des paires USDC - Critères renforcés OPTIMISÉS
-    MIN_VOLUME_USDC: float = 50000000  # OPTIMISÉ: Volume minimum 50M$ (équilibré)
-    MAX_SPREAD_PERCENT: float = 0.15  # OPTIMISÉ: Spread plus strict 0.15% pour éviter slippage
-    MAX_PAIRS_TO_ANALYZE: int = 6  # OPTIMISÉ: Moins de paires, meilleures uniquement
-    MIN_VOLATILITY_1H_PERCENT: float = 0.8  # OPTIMISÉ: Volatilité minimum 0.8% (permet BTC/ETH même calmes)
+    MIN_VOLUME_USDC: float = 8000000  # AJUSTÉ: Volume minimum 8M$ (compromis entre 5M et 10M)
+    MAX_SPREAD_PERCENT: float = 0.18  # AJUSTÉ: Spread 0.18% (compromis entre qualité et opportunités)
+    MAX_PAIRS_TO_ANALYZE: int = 7  # AJUSTÉ: 7 paires (compromis)
+    MIN_VOLATILITY_1H_PERCENT: float = 0.7  # AJUSTÉ: Volatilité minimum 0.7% (compromis)
     
     # Configuration adaptative pour marchés calmes
     ADAPTIVE_FILTERING: bool = True  # Adaptation automatique selon conditions marché
-    MIN_VOLUME_USDC_FALLBACK: float = 30000000  # Volume fallback si pas assez de paires (30M)
+    MIN_VOLUME_USDC_FALLBACK: float = 4000000  # CORRIGÉ: Volume fallback 4M (cohérent avec 8M principal)
     MIN_VOLATILITY_1H_FALLBACK: float = 0.5  # Volatilité fallback si marché trop calme (0.5%)
     
     # Horaires de trading optimisés (heure française/européenne)
@@ -100,7 +100,7 @@ class TradingConfig:
     BOLLINGER_STD_DEV: int = 2
     
     # Seuils de signal - Plus sélectif pour capital élevé
-    MIN_SIGNAL_CONDITIONS: int = 4  # R7: Garder 4 conditions minimum
+    MIN_SIGNAL_CONDITIONS: int = 4  # REVERTED: Garder 4 conditions pour préserver win rate
     
     # OPTIMISÉ R2: Confirmation de cassure pour éviter faux signaux
     ENABLE_BREAKOUT_CONFIRMATION: bool = True  # Activer confirmation cassure
