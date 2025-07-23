@@ -491,21 +491,27 @@ class TechnicalAnalyzer:
         if len(analysis.signals) < min_conditions:
             return False
         
-        # Vérification score minimum
-        if analysis.total_score < min_conditions * 2:
+        # Vérification score minimum - Ajustement conservateur
+        # Au lieu de min_conditions * 2, utiliser min_conditions * 1.75 (équilibré)
+        min_score_required = min_conditions * 1.75
+        if analysis.total_score < min_score_required:
             return False
         
         # Vérification recommandation
         if analysis.recommendation in ["AUCUN SIGNAL", "EVITER"]:
             return False
         
-        # Vérification présence d'au moins un signal fort
+        # Vérification présence d'au moins un signal fort OU plusieurs signaux modérés
         has_strong_signal = any(
             signal.strength in [SignalStrength.STRONG, SignalStrength.VERY_STRONG]
             for signal in analysis.signals
         )
         
-        return has_strong_signal
+        # Alternative: Si pas de signal fort, accepter si on a 5+ signaux avec au moins 3 MODERATE
+        moderate_signals = sum(1 for signal in analysis.signals if signal.strength == SignalStrength.MODERATE)
+        fallback_validation = len(analysis.signals) >= 5 and moderate_signals >= 3
+        
+        return has_strong_signal or fallback_validation
 
     def get_signal_summary(self, analysis: MarketAnalysis) -> str:
         """Retourne un résumé des signaux"""

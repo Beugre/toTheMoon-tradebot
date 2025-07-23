@@ -1773,16 +1773,16 @@ class ScalpingBot:
                     await self.close_position(trade_id, current_price, "STOP_LOSS")
                     continue
 
-                # Vérification Take Profit
-                if current_price >= trade.take_profit:
-                    await self.close_position(trade_id, current_price, "TAKE_PROFIT")
-                    continue
-
-                # Trailing Stop
+                # Trailing Stop (priorité sur Take Profit pour laisser monter)
+                trailing_activated = False
                 if current_price >= trade.trailing_stop:
                     # Mise à jour du trailing stop
                     new_stop = current_price * (1 - self.config.TRAILING_STEP_PERCENT / 100)
                     if new_stop > trade.stop_loss:
+                        trailing_activated = True
+                        old_stop = trade.stop_loss
+                        old_tp = trade.take_profit
+                        trailing_activated = True
                         old_stop = trade.stop_loss
                         old_tp = trade.take_profit
                         
@@ -1834,6 +1834,11 @@ class ScalpingBot:
                             await self.database.insert_trailing_stop(trailing_data)
                         except Exception as e:
                             self.logger.error(f"❌ Erreur enregistrement trailing stop: {e}")
+
+                # Vérification Take Profit (seulement si trailing stop pas activé)
+                if not trailing_activated and current_price >= trade.take_profit:
+                    await self.close_position(trade_id, current_price, "TAKE_PROFIT")
+                    continue
 
             except Exception as e:
                 self.logger.error(f"❌ Erreur gestion position {trade_id}: {e}")
@@ -1960,17 +1965,18 @@ class ScalpingBot:
             # Utilisation du P&L réel si capital_before disponible
             if trade.capital_before is not None:
                 real_pnl = capital_after_trade - trade.capital_before
-                real_pnl_percent = (real_pnl / trade.capital_before) * 100
+                # CORRECTION: Utiliser le pourcentage théorique (basé sur le prix) au lieu du capital
+                # real_pnl_percent = (real_pnl / trade.capital_before) * 100  # BUG: mauvais calcul
                 
                 # Mise à jour du trade avec le capital après et P&L réel
                 trade.capital_after = capital_after_trade
                 trade.pnl = real_pnl
                 pnl_amount = real_pnl
-                pnl_percent = real_pnl_percent
+                pnl_percent = theoretical_pnl_percent  # CORRECTION: utiliser le % théorique correct
                 
-                self.logger.info(f"💰 P&L Réel: {real_pnl:+.4f} USDC ({real_pnl_percent:+.3f}%)")
+                self.logger.info(f"💰 P&L Réel: {real_pnl:+.4f} USDC ({theoretical_pnl_percent:+.3f}%)")
                 self.logger.debug(f"🧮 P&L Théorique: {theoretical_pnl:+.4f} USDC ({theoretical_pnl_percent:+.3f}%)")
-                self.logger.debug(f"📊 Différence: {real_pnl - theoretical_pnl:+.4f} USDC ({real_pnl_percent - theoretical_pnl_percent:+.3f}%)")
+                self.logger.debug(f"📊 Capital-based %: {real_pnl / trade.capital_before * 100:+.3f}% (debug only)")
             else:
                 # Fallback sur calcul théorique si capital_before manquant
                 self.logger.warning(f"⚠️ Capital avant trade non disponible, utilisation du calcul théorique")
