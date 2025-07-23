@@ -9,7 +9,7 @@ import logging
 import os
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Dict, List, Optional, Tuple
 
@@ -80,6 +80,14 @@ class PairScore:
     score: float
     spread: float
     atr: float = 0.0
+
+def get_paris_time() -> datetime:
+    """Obtient l'heure actuelle en fuseau horaire Paris (UTC+2)"""
+    return datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=2)))
+
+def get_paris_time_iso() -> str:
+    """Obtient l'heure actuelle en fuseau horaire Paris au format ISO"""
+    return get_paris_time().isoformat()
 
 class ScalpingBot:
     def __init__(self):
@@ -260,7 +268,7 @@ class ScalpingBot:
                         'timestamp': trade.timestamp.isoformat(),
                         'trailing_stop': getattr(trade, 'trailing_stop', 0),
                         'direction': trade.direction.value if hasattr(trade.direction, 'value') else str(trade.direction),
-                        'saved_at': datetime.now().isoformat(),
+                        'saved_at': get_paris_time_iso(),
                         'session_id': self.firebase_logger.session_id
                     }
                     
@@ -592,7 +600,8 @@ class ScalpingBot:
                 'low_volume': 0,
                 'high_spread': 0,
                 'low_volatility': 0,
-                'total_analyzed': len(usdc_pairs)
+                'total_retrieved': len(usdc_pairs),
+                'total_analyzed': 0  # Sera compté pendant l'analyse
             }
             excluded_pairs = {
                 'blacklisted': [],
@@ -634,7 +643,7 @@ class ScalpingBot:
                 
                 # 📊 Structure détaillée de la décision
                 decision = {
-                    "timestamp": datetime.now().isoformat(),
+                    "timestamp": get_paris_time_iso(),
                     "pair": symbol,
                     "price": current_price,
                     "volume_24h": volume_usdc,
@@ -691,6 +700,7 @@ class ScalpingBot:
                     continue
                 
                 # ✅ Paire validée pour les critères de base - analyser les signaux
+                exclusion_stats['total_analyzed'] += 1  # Compteur des paires réellement analysées
                 try:
                     # Analyse technique pour calculer le score
                     klines = self.binance_client.get_klines(
@@ -794,7 +804,7 @@ class ScalpingBot:
                     self.logger.error(f"❌ Erreur logging Firebase décisions: {e}")
             
             # �📊 LOGGING DÉTAILLÉ DES EXCLUSIONS (conservé pour logs console)
-            self.logger.info(f"📊 Scan terminé - {exclusion_stats['total_analyzed']} paires analysées:")
+            self.logger.info(f"📊 Scan terminé - {exclusion_stats['total_retrieved']} paires récupérées, {exclusion_stats['total_analyzed']} analysées:")
             self.logger.info(f"   ⚫ Blacklistées: {exclusion_stats['blacklisted']} paires")
             if excluded_pairs['blacklisted']:
                 self.logger.info(f"      {', '.join(excluded_pairs['blacklisted'][:5])}")
@@ -879,6 +889,7 @@ class ScalpingBot:
                     message=f"📊 Scan terminé: {len(pair_scores)} paires validées, Top 3: {', '.join(top_3_pairs)}",
                     module="pair_scanner",
                     additional_data={
+                        'total_pairs_retrieved': exclusion_stats['total_retrieved'],
                         'total_pairs_analyzed': exclusion_stats['total_analyzed'],
                         'pairs_validated': len(pair_scores),
                         'top_pairs_selected': len(top_pairs),
@@ -1318,10 +1329,10 @@ class ScalpingBot:
                         'stop_loss': stop_loss,
                         'take_profit': take_profit,
                         'size': quantity,
-                        'timestamp': datetime.now().isoformat(),
+                        'timestamp': get_paris_time_iso(),
                         'trailing_stop': trailing_stop,
                         'direction': direction.value if hasattr(direction, 'value') else str(direction),
-                        'saved_at': datetime.now().isoformat(),
+                        'saved_at': get_paris_time_iso(),
                         'session_id': self.firebase_logger.session_id
                     }
                     self.firebase_logger.firestore_db.collection('position_states').document(trade_id).set(position_data)
