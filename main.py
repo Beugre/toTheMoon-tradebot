@@ -2467,8 +2467,9 @@ class ScalpingBot:
                     
                     # Vérification que la quantité ajustée est valide
                     if quantity_to_sell <= 0:
-                    await self.close_position_virtually(symbol, exit_price, reason)
-                    return
+                        self.logger.error(f"❌ Quantité ajustée invalide pour {symbol}, fermeture virtuelle")
+                        await self.close_position_virtually(symbol, exit_price, f"{reason}_INVALID_QTY")
+                        return
             
             # Passage de l'ordre de vente avec gestion d'erreur améliorée
             try:
