@@ -9,7 +9,7 @@ import logging
 import threading
 import time
 from dataclasses import asdict, dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from queue import Queue
 from typing import Any, Dict, List, Optional
 
@@ -23,14 +23,6 @@ except ImportError:
 
 from .firebase_config import FIREBASE_CONFIG
 
-
-def get_paris_time() -> datetime:
-    """Obtient l'heure actuelle en fuseau horaire Paris (UTC+2)"""
-    return datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=2)))
-
-def get_paris_time_iso() -> str:
-    """Obtient l'heure actuelle en fuseau horaire Paris au format ISO"""
-    return get_paris_time().isoformat()
 
 @dataclass
 class LogEntry:
@@ -159,7 +151,7 @@ class FirebaseLogger:
             # Test Realtime Database
             test_ref = self.db_ref.child('_connection_test') # type: ignore
             test_ref.set({
-                'timestamp': get_paris_time_iso(),
+                'timestamp': datetime.now().isoformat(),
                 'session_id': self.session_id,
                 'status': 'connected'
             })
@@ -167,7 +159,7 @@ class FirebaseLogger:
             # Test Firestore
             doc_ref = self.firestore_db.collection('_connection_test').document('test') # type: ignore
             doc_ref.set({
-                'timestamp': get_paris_time_iso(),
+                'timestamp': datetime.now().isoformat(),
                 'session_id': self.session_id,
                 'status': 'connected'
             })
@@ -316,7 +308,7 @@ class FirebaseLogger:
             return
 
         log_entry = LogEntry(
-            timestamp=get_paris_time_iso(),
+            timestamp=datetime.now().isoformat(),
             level=level,
             message=message,
             bot_module=module,
@@ -337,7 +329,7 @@ class FirebaseLogger:
         # Conversion en TradeEntry
         trade_entry = TradeEntry(
             trade_id=trade_data.get('trade_id', ''),
-            timestamp=trade_data.get('timestamp', get_paris_time_iso()),
+            timestamp=trade_data.get('timestamp', datetime.now().isoformat()),
             pair=trade_data.get('pair', ''),
             direction=trade_data.get('direction', ''),
             action=trade_data.get('action', ''),
@@ -368,7 +360,7 @@ class FirebaseLogger:
             return
 
         perf_entry = PerformanceEntry(
-            timestamp=get_paris_time_iso(),
+            timestamp=datetime.now().isoformat(),
             session_id=self.session_id,
             total_capital=performance_data.get('total_capital', 0.0),
             daily_pnl=performance_data.get('daily_pnl', 0.0),
@@ -388,7 +380,7 @@ class FirebaseLogger:
                   additional_info: Optional[Dict] = None):
         """Log une métrique temps réel"""
         metric_entry = MetricEntry(
-            timestamp=get_paris_time_iso(),
+            timestamp=datetime.now().isoformat(),
             metric_type=metric_type,
             value=value,
             pair=pair,
@@ -404,7 +396,7 @@ class FirebaseLogger:
 
         # Structure spécifique pour les résultats de scan
         scan_result = {
-            "timestamp": get_paris_time_iso(),
+            "timestamp": datetime.now().isoformat(),
             "session_id": self.session_id,
             "pair": scan_data.get("pair", ""),
             "decision": scan_data.get("final_decision", "UNKNOWN"),
@@ -437,7 +429,7 @@ class FirebaseLogger:
             return
 
         summary_result = {
-            "timestamp": get_paris_time_iso(),
+            "timestamp": datetime.now().isoformat(),
             "session_id": self.session_id,
             "scan_type": "SUMMARY",
             "total_pairs": summary_data.get("total_pairs", 0),

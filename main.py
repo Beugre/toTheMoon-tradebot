@@ -9,7 +9,7 @@ import logging
 import os
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from enum import Enum
 from typing import Dict, List, Optional, Tuple
 
@@ -80,14 +80,6 @@ class PairScore:
     score: float
     spread: float
     atr: float = 0.0
-
-def get_paris_time() -> datetime:
-    """Obtient l'heure actuelle en fuseau horaire Paris (UTC+2)"""
-    return datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=2)))
-
-def get_paris_time_iso() -> str:
-    """Obtient l'heure actuelle en fuseau horaire Paris au format ISO"""
-    return get_paris_time().isoformat()
 
 class ScalpingBot:
     def __init__(self):
@@ -268,7 +260,7 @@ class ScalpingBot:
                         'timestamp': trade.timestamp.isoformat(),
                         'trailing_stop': getattr(trade, 'trailing_stop', 0),
                         'direction': trade.direction.value if hasattr(trade.direction, 'value') else str(trade.direction),
-                        'saved_at': get_paris_time_iso(),
+                        'saved_at': datetime.now().isoformat(),
                         'session_id': self.firebase_logger.session_id
                     }
                     
@@ -643,7 +635,7 @@ class ScalpingBot:
                 
                 # 📊 Structure détaillée de la décision
                 decision = {
-                    "timestamp": get_paris_time_iso(),
+                    "timestamp": datetime.now().isoformat(),
                     "pair": symbol,
                     "price": current_price,
                     "volume_24h": volume_usdc,
@@ -1329,10 +1321,10 @@ class ScalpingBot:
                         'stop_loss': stop_loss,
                         'take_profit': take_profit,
                         'size': quantity,
-                        'timestamp': get_paris_time_iso(),
+                        'timestamp': datetime.now().isoformat(),
                         'trailing_stop': trailing_stop,
                         'direction': direction.value if hasattr(direction, 'value') else str(direction),
-                        'saved_at': get_paris_time_iso(),
+                        'saved_at': datetime.now().isoformat(),
                         'session_id': self.firebase_logger.session_id
                     }
                     self.firebase_logger.firestore_db.collection('position_states').document(trade_id).set(position_data)
