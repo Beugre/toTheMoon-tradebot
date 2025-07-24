@@ -23,6 +23,15 @@ from firebase_admin import credentials, firestore
 # Charger les variables d'environnement dès le démarrage
 load_dotenv()
 
+# Configuration simplifiée pour les clés API (comme dans config.py)
+class APIConfig:
+    """Configuration des clés API pour Streamlit"""
+    BINANCE_API_KEY: str = os.getenv("BINANCE_API_KEY", "")
+    BINANCE_SECRET_KEY: str = os.getenv("BINANCE_SECRET_KEY", "")
+
+# Instance globale de la configuration
+API_CONFIG = APIConfig()
+
 
 class RealTimeTradingMonitor:
     """Monitoring en temps réel - Connexion directe Binance + Firebase"""
@@ -33,7 +42,6 @@ class RealTimeTradingMonitor:
         
     def setup_binance_client(self):
         """Configuration du client Binance"""
-        import os
         try:
             # Essayer d'abord les secrets Streamlit Cloud
             if hasattr(st, 'secrets') and 'binance' in st.secrets:
@@ -41,43 +49,29 @@ class RealTimeTradingMonitor:
                 api_secret = st.secrets['binance']['api_secret']
                 st.success("🔑 Binance configuré avec les secrets Streamlit Cloud")
             else:
-                # Variables d'environnement locales
-                # Double chargement pour être sûr
-                load_dotenv(override=True)
-                api_key = os.getenv('BINANCE_API_KEY')
-                api_secret = os.getenv('BINANCE_SECRET_KEY')  
-                
-                # Test alternatif avec chemin absolu
-                if not api_key or not api_secret:
-                    env_path = os.path.join(os.getcwd(), '.env')
-                    st.info(f"🔍 Tentative de chargement depuis: {env_path}")
-                    load_dotenv(env_path, override=True)
-                    api_key = os.getenv('BINANCE_API_KEY')
-                    api_secret = os.getenv('BINANCE_SECRET_KEY')
-                
-                st.success("🔑 Binance configuré avec les variables locales")
+                # Utiliser la configuration API (comme dashboard.py)
+                api_key = API_CONFIG.BINANCE_API_KEY
+                api_secret = API_CONFIG.BINANCE_SECRET_KEY
+                st.success("🔑 Binance configuré avec APIConfig")
                 
                 # Debug pour vérifier la récupération
                 if api_key:
                     st.info(f"🔍 API Key trouvée: {api_key[:10]}...")
                 else:
-                    st.warning("⚠️ BINANCE_API_KEY non trouvée")
+                    st.warning("⚠️ BINANCE_API_KEY non trouvée dans APIConfig")
                 
                 if api_secret:
                     st.info(f"🔍 Secret Key trouvée: {api_secret[:10]}...")
                 else:
-                    st.warning("⚠️ BINANCE_SECRET_KEY non trouvée")
-                    
-                # Debug supplémentaire
-                st.info(f"🔍 Répertoire courant: {os.getcwd()}")
-                env_exists = os.path.exists('.env')
-                st.info(f"🔍 Fichier .env existe: {env_exists}")
-                if env_exists:
-                    with open('.env', 'r') as f:
-                        first_lines = f.read()[:200]
-                        st.info(f"🔍 Début du fichier .env: {first_lines}...")
+                    st.warning("⚠️ BINANCE_SECRET_KEY non trouvée dans APIConfig")
             
             if not api_key or not api_secret:
+                st.error("� Clés manquantes ! Pour Streamlit Cloud, configure les secrets :")
+                st.code("""
+[binance]
+api_key = "ta_clé_api"
+api_secret = "ta_clé_secrète"
+                """)
                 raise ValueError("Clés API Binance manquantes")
                 
             self.binance_client = Client(
