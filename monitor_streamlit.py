@@ -17,7 +17,11 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 from binance.client import Client
+from dotenv import load_dotenv
 from firebase_admin import credentials, firestore
+
+# Charger les variables d'environnement dès le démarrage
+load_dotenv()
 
 
 class RealTimeTradingMonitor:
@@ -29,6 +33,7 @@ class RealTimeTradingMonitor:
         
     def setup_binance_client(self):
         """Configuration du client Binance"""
+        import os
         try:
             # Essayer d'abord les secrets Streamlit Cloud
             if hasattr(st, 'secrets') and 'binance' in st.secrets:
@@ -36,11 +41,20 @@ class RealTimeTradingMonitor:
                 api_secret = st.secrets['binance']['api_secret']
                 st.success("🔑 Binance configuré avec les secrets Streamlit Cloud")
             else:
-                # Fallback sur les variables d'environnement locales
-                from dotenv import load_dotenv
-                load_dotenv()
+                # Variables d'environnement locales
+                # Double chargement pour être sûr
+                load_dotenv(override=True)
                 api_key = os.getenv('BINANCE_API_KEY')
-                api_secret = os.getenv('BINANCE_SECRET_KEY')  # Nom correct dans .env
+                api_secret = os.getenv('BINANCE_SECRET_KEY')  
+                
+                # Test alternatif avec chemin absolu
+                if not api_key or not api_secret:
+                    env_path = os.path.join(os.getcwd(), '.env')
+                    st.info(f"🔍 Tentative de chargement depuis: {env_path}")
+                    load_dotenv(env_path, override=True)
+                    api_key = os.getenv('BINANCE_API_KEY')
+                    api_secret = os.getenv('BINANCE_SECRET_KEY')
+                
                 st.success("🔑 Binance configuré avec les variables locales")
                 
                 # Debug pour vérifier la récupération
@@ -53,6 +67,15 @@ class RealTimeTradingMonitor:
                     st.info(f"🔍 Secret Key trouvée: {api_secret[:10]}...")
                 else:
                     st.warning("⚠️ BINANCE_SECRET_KEY non trouvée")
+                    
+                # Debug supplémentaire
+                st.info(f"🔍 Répertoire courant: {os.getcwd()}")
+                env_exists = os.path.exists('.env')
+                st.info(f"🔍 Fichier .env existe: {env_exists}")
+                if env_exists:
+                    with open('.env', 'r') as f:
+                        first_lines = f.read()[:200]
+                        st.info(f"🔍 Début du fichier .env: {first_lines}...")
             
             if not api_key or not api_secret:
                 raise ValueError("Clés API Binance manquantes")
@@ -61,6 +84,7 @@ class RealTimeTradingMonitor:
                 api_key=api_key,
                 api_secret=api_secret
             )
+            st.success("✅ Client Binance initialisé avec succès")
         except Exception as e:
             st.error(f"❌ Erreur Binance: {e}")
             raise
