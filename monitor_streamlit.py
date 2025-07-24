@@ -4,20 +4,19 @@ Surveillance continue directe Binance + Firebase (comme dashboard.py)
 """
 
 import logging
+import os
 import time
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 
+# Import Firebase direct
+import firebase_admin
 import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 from binance.client import Client
-import os
-
-# Import Firebase direct
-import firebase_admin
 from firebase_admin import credentials, firestore
 
 
@@ -41,8 +40,19 @@ class RealTimeTradingMonitor:
                 from dotenv import load_dotenv
                 load_dotenv()
                 api_key = os.getenv('BINANCE_API_KEY')
-                api_secret = os.getenv('BINANCE_SECRET_KEY')
+                api_secret = os.getenv('BINANCE_SECRET_KEY')  # Nom correct dans .env
                 st.success("🔑 Binance configuré avec les variables locales")
+                
+                # Debug pour vérifier la récupération
+                if api_key:
+                    st.info(f"🔍 API Key trouvée: {api_key[:10]}...")
+                else:
+                    st.warning("⚠️ BINANCE_API_KEY non trouvée")
+                
+                if api_secret:
+                    st.info(f"🔍 Secret Key trouvée: {api_secret[:10]}...")
+                else:
+                    st.warning("⚠️ BINANCE_SECRET_KEY non trouvée")
             
             if not api_key or not api_secret:
                 raise ValueError("Clés API Binance manquantes")
