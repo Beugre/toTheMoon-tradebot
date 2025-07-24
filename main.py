@@ -1546,6 +1546,7 @@ class ScalpingBot:
                     'take_profit': take_profit,
                     'capital_before': capital_before_trade,
                     'capital_after': capital_after_trade,
+                    'binance_order_id': order.get('orderId'),  # 🎯 AJOUT: ID Binance pour audit
                     'session_trading': get_current_trading_session(),
                     'volatility_1h': volatility_1h,
                     'volatility_24h': abs(price_change_24h),
@@ -2860,7 +2861,9 @@ class ScalpingBot:
                         'capital_before': total_capital - pnl_amount,
                         'capital_after': total_capital,
                         'pnl_gross': pnl_amount,
-                        'pnl_net': pnl_amount  # À ajuster si vous avez des frais à déduire
+                        'pnl_net': pnl_amount,  # À ajuster si vous avez des frais à déduire
+                        'binance_order_id': getattr(trade, 'id', None),  # 🎯 ID Binance d'origine
+                        'action': 'CLOSE'  # 🎯 AJOUT: Action pour l'audit
                     }
                     
                     # 🔥 POINT 1: Try-catch renforcé avec TradeValidator intégré + Log de confirmation
