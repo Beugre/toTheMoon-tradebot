@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import time
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import Enum
@@ -35,6 +36,7 @@ from trading_hours import (get_current_trading_session, get_hours_status_message
 from utils.database import TradingDatabase
 from utils.enhanced_sheets_logger import EnhancedSheetsLogger
 from utils.firebase_logger import firebase_logger  # type: ignore
+
 
 # === TRADE VALIDATOR INTEGRATION ===
 class TradeValidator:
@@ -1459,7 +1461,7 @@ class ScalpingBot:
                 emoji = strength_emoji.get(signal.strength.name, "⚪")
                 self.logger.info(f"   {emoji} Signal {i+1}: {signal.indicator} - {signal.description}")
             
-            # Firebase logging pour trade ouvert avec données techniques complètes
+                # Firebase logging pour trade ouvert avec données techniques complètes
             if self.firebase_logger:
                 # Préparer les signaux détectés
                 signals_data = []
@@ -1470,50 +1472,54 @@ class ScalpingBot:
                         'strength': signal.strength.name
                     })
                 
-                self.firebase_logger.log_message(
-                    level="INFO",
-                    message=f"📈 TRADE OUVERT: {symbol} - Prix: {current_price:.4f} (Trailing: {trailing_stop:.4f})",
-                    module="trade_execution",
-                    trade_id=trade_id,
-                    pair=symbol,
-                    capital=capital_before_trade,
-                    additional_data={
-                        'order_id': order['orderId'],
-                        'entry_price': current_price,
-                        'quantity': quantity,
-                        'stop_loss': stop_loss,
-                        'take_profit': take_profit,
-                        'trailing_stop': trailing_stop,
-                        'trailing_activation_percent': self.config.TRAILING_ACTIVATION_PERCENT,
-                        'trailing_step_percent': self.config.TRAILING_STEP_PERCENT,
-                        'position_size': position_size,
-                        'volatility_1h': volatility_1h,
-                        'volatility_24h': abs(price_change_24h),
-                        'technical_data': {
-                            'rsi': float(rsi_current) if not np.isnan(rsi_current) else 0,
-                            'macd': float(macd[-1]) if len(macd) > 0 and not np.isnan(macd[-1]) else 0,
-                            'macd_signal': float(macd_signal[-1]) if len(macd_signal) > 0 and not np.isnan(macd_signal[-1]) else 0,
-                            'macd_hist': float(macd_hist[-1]) if len(macd_hist) > 0 and not np.isnan(macd_hist[-1]) else 0,
-                            'ema_fast': float(ema_fast) if not np.isnan(ema_fast) else 0,
-                            'ema_slow': float(ema_slow) if not np.isnan(ema_slow) else 0,
-                            'analysis_score': analysis.total_score,
-                            'trend': analysis.trend,
-                            'momentum': analysis.momentum
-                        },
-                        'market_data': {
-                            'volume_24h_usdc': volume_usdc,
-                            'spread_percent': spread,
-                            'price_change_24h': price_change_24h,
-                            'bid_price': bid,
-                            'ask_price': ask
-                        },
-                        'signals_detected': signals_data,
-                        'conditions_met': len(analysis.signals),
-                        'min_conditions_required': self.config.MIN_SIGNAL_CONDITIONS
-                    }
-                )
-            
-            # Notification Telegram
+                try:
+                    self.firebase_logger.log_message(
+                        level="INFO",
+                        message=f"📈 TRADE OUVERT: {symbol} - Prix: {current_price:.4f} (Trailing: {trailing_stop:.4f})",
+                        module="trade_execution",
+                        trade_id=trade_id,
+                        pair=symbol,
+                        capital=capital_before_trade,
+                        additional_data={
+                            'order_id': order['orderId'],
+                            'entry_price': current_price,
+                            'quantity': quantity,
+                            'stop_loss': stop_loss,
+                            'take_profit': take_profit,
+                            'trailing_stop': trailing_stop,
+                            'trailing_activation_percent': self.config.TRAILING_ACTIVATION_PERCENT,
+                            'trailing_step_percent': self.config.TRAILING_STEP_PERCENT,
+                            'position_size': position_size,
+                            'volatility_1h': volatility_1h,
+                            'volatility_24h': abs(price_change_24h),
+                            'technical_data': {
+                                'rsi': float(rsi_current) if not np.isnan(rsi_current) else 0,
+                                'macd': float(macd[-1]) if len(macd) > 0 and not np.isnan(macd[-1]) else 0,
+                                'macd_signal': float(macd_signal[-1]) if len(macd_signal) > 0 and not np.isnan(macd_signal[-1]) else 0,
+                                'macd_hist': float(macd_hist[-1]) if len(macd_hist) > 0 and not np.isnan(macd_hist[-1]) else 0,
+                                'ema_fast': float(ema_fast) if not np.isnan(ema_fast) else 0,
+                                'ema_slow': float(ema_slow) if not np.isnan(ema_slow) else 0,
+                                'analysis_score': analysis.total_score,
+                                'trend': analysis.trend,
+                                'momentum': analysis.momentum
+                            },
+                            'market_data': {
+                                'volume_24h_usdc': volume_usdc,
+                                'spread_percent': spread,
+                                'price_change_24h': price_change_24h,
+                                'bid_price': bid,
+                                'ask_price': ask
+                            },
+                            'signals_detected': signals_data,
+                            'conditions_met': len(analysis.signals),
+                            'min_conditions_required': self.config.MIN_SIGNAL_CONDITIONS
+                        }
+                    )
+                    self.logger.info(f"✅ Trade OPEN message loggué Firebase pour {symbol} - détails techniques inclus")
+                    
+                except Exception as log_error:
+                    error_uuid = str(uuid.uuid4())
+                    self.logger.error(f"❌ Erreur log_message Firebase trade OPEN {symbol} (Error UUID: {error_uuid}): {log_error}")            # Notification Telegram
             await self.telegram_notifier.send_trade_open_notification(trade, position_size)
             
             # Log dans Google Sheets (si activé)
@@ -1527,54 +1533,73 @@ class ScalpingBot:
                 capital_after_trade = self.get_total_capital()
             
             # 🔥 LOG FIREBASE: Trade ouvert avec données techniques complètes
-            self.firebase_logger.log_trade({
-                'trade_id': trade_id,
-                'timestamp': trade.timestamp.isoformat(),
-                'pair': symbol,
-                'direction': direction.value,
-                'action': 'OPEN',
-                'entry_price': current_price,
-                'size': quantity,
-                'stop_loss': stop_loss,
-                'take_profit': take_profit,
-                'capital_before': capital_before_trade,
-                'capital_after': capital_after_trade,
-                'session_trading': get_current_trading_session(),
-                'volatility_1h': volatility_1h,
-                'volatility_24h': abs(price_change_24h),
-                'volume_24h_usdc': volume_usdc,
-                'spread_percent': spread,
-                'technical_indicators': {
-                    'rsi': float(rsi_current) if not np.isnan(rsi_current) else 0,
-                    'macd': float(macd[-1]) if len(macd) > 0 and not np.isnan(macd[-1]) else 0,
-                    'macd_signal': float(macd_signal[-1]) if len(macd_signal) > 0 and not np.isnan(macd_signal[-1]) else 0,
-                    'macd_hist': float(macd_hist[-1]) if len(macd_hist) > 0 and not np.isnan(macd_hist[-1]) else 0,
-                    'ema_fast': float(ema_fast) if not np.isnan(ema_fast) else 0,
-                    'ema_slow': float(ema_slow) if not np.isnan(ema_slow) else 0,
-                    'analysis_score': analysis.total_score,
-                    'trend': analysis.trend,
-                    'momentum': analysis.momentum
-                },
-                'signals': {
+            try:
+                trade_data = {
+                    'trade_id': trade_id,
+                    'timestamp': trade.timestamp.isoformat(),
+                    'pair': symbol,
                     'direction': direction.value,
-                    'position_size': position_size,
-                    'anti_fragmentation': True,
-                    'conditions_met': len(analysis.signals),
-                    'signals_count': len(analysis.signals)
+                    'action': 'OPEN',
+                    'entry_price': current_price,
+                    'size': quantity,
+                    'stop_loss': stop_loss,
+                    'take_profit': take_profit,
+                    'capital_before': capital_before_trade,
+                    'capital_after': capital_after_trade,
+                    'session_trading': get_current_trading_session(),
+                    'volatility_1h': volatility_1h,
+                    'volatility_24h': abs(price_change_24h),
+                    'volume_24h_usdc': volume_usdc,
+                    'spread_percent': spread,
+                    'technical_indicators': {
+                        'rsi': float(rsi_current) if not np.isnan(rsi_current) else 0,
+                        'macd': float(macd[-1]) if len(macd) > 0 and not np.isnan(macd[-1]) else 0,
+                        'macd_signal': float(macd_signal[-1]) if len(macd_signal) > 0 and not np.isnan(macd_signal[-1]) else 0,
+                        'macd_hist': float(macd_hist[-1]) if len(macd_hist) > 0 and not np.isnan(macd_hist[-1]) else 0,
+                        'ema_fast': float(ema_fast) if not np.isnan(ema_fast) else 0,
+                        'ema_slow': float(ema_slow) if not np.isnan(ema_slow) else 0,
+                        'analysis_score': analysis.total_score,
+                        'trend': analysis.trend,
+                        'momentum': analysis.momentum
+                    },
+                    'signals': {
+                        'direction': direction.value,
+                        'position_size': position_size,
+                        'anti_fragmentation': True,
+                        'conditions_met': len(analysis.signals),
+                        'signals_count': len(analysis.signals)
+                    }
                 }
-            })
+                
+                # 🔥 POINT 1: Try-catch renforcé avec TradeValidator intégré + Log de confirmation
+                validator = TradeValidator()
+                success = validator.safe_log_trade(self.firebase_logger, trade_data)
+                if success:
+                    self.logger.info(f"✅ Trade OPEN loggué Firebase pour {symbol} à {current_price:.4f} USDC (Taille: {position_size:.2f})")
+                else:
+                    self.logger.warning(f"⚠️ Échec log Firebase trade OPEN pour {symbol}")
+                    
+            except Exception as log_error:
+                error_uuid = str(uuid.uuid4())
+                self.logger.error(f"❌ Erreur log Firebase trade OPEN {symbol} (Error UUID: {error_uuid}): {log_error}")
             
             # 🔥 LOG FIREBASE: Métrique capital
-            self.firebase_logger.log_metric(
-                metric_type="capital_change",
-                value=capital_after_trade - capital_before_trade,
-                pair=symbol,
-                additional_info={
-                    'action': 'trade_open',
-                    'capital_total': capital_after_trade,
-                    'position_size': position_size
-                }
-            )
+            try:
+                self.firebase_logger.log_metric(
+                    metric_type="capital_change",
+                    value=capital_after_trade - capital_before_trade,
+                    pair=symbol,
+                    additional_info={
+                        'action': 'trade_open',
+                        'capital_total': capital_after_trade,
+                        'position_size': position_size
+                    }
+                )
+                self.logger.info(f"✅ Métrique capital_change loggée Firebase pour {symbol} (changement: {capital_after_trade - capital_before_trade:+.2f})")
+                
+            except Exception as metric_error:
+                error_uuid = str(uuid.uuid4())
+                self.logger.error(f"❌ Erreur log_metric Firebase {symbol} (Error UUID: {error_uuid}): {metric_error}")
             
             # Enregistrement en base de données
             try:
@@ -1809,25 +1834,31 @@ class ScalpingBot:
             
             # 🔥 FIREBASE LOGGING POUR FERMETURE AUTOMATIQUE
             if self.firebase_logger:
-                self.firebase_logger.log_message(
-                    level="INFO",
-                    message=f"🤖 TRADE FERMÉ AUTOMATIQUEMENT: {trade.pair} - P&L: {pnl_amount:+.2f} USDC ({pnl_percent:+.2f}%)",
-                    module="binance_auto_execution",
-                    trade_id=trade_id,
-                    pair=trade.pair,
-                    capital=capital_after_trade,
-                    additional_data={
-                        'exit_price': exit_price,
-                        'exit_reason': reason,
-                        'pnl_amount': pnl_amount,
-                        'pnl_percent': pnl_percent,
-                        'duration_seconds': trade.duration.total_seconds() if trade.duration else 0,
-                        'daily_pnl': self.daily_pnl,
-                        'daily_trades': self.daily_trades,
-                        'execution_source': 'binance_automatic',
-                        'order_id': trade.stop_loss_order_id
-                    }
-                )
+                try:
+                    self.firebase_logger.log_message(
+                        level="INFO",
+                        message=f"🤖 TRADE FERMÉ AUTOMATIQUEMENT: {trade.pair} - P&L: {pnl_amount:+.2f} USDC ({pnl_percent:+.2f}%)",
+                        module="binance_auto_execution",
+                        trade_id=trade_id,
+                        pair=trade.pair,
+                        capital=capital_after_trade,
+                        additional_data={
+                            'exit_price': exit_price,
+                            'exit_reason': reason,
+                            'pnl_amount': pnl_amount,
+                            'pnl_percent': pnl_percent,
+                            'duration_seconds': trade.duration.total_seconds() if trade.duration else 0,
+                            'daily_pnl': self.daily_pnl,
+                            'daily_trades': self.daily_trades,
+                            'execution_source': 'binance_automatic',
+                            'order_id': trade.stop_loss_order_id
+                        }
+                    )
+                    self.logger.info(f"✅ Trade CLOSE AUTO message loggué Firebase pour {trade.pair} - P&L: {pnl_amount:+.2f} USDC")
+                    
+                except Exception as log_error:
+                    error_uuid = str(uuid.uuid4())
+                    self.logger.error(f"❌ Erreur log_message Firebase trade CLOSE AUTO {trade.pair} (Error UUID: {error_uuid}): {log_error}")
                 
                 # Log Firebase pour trade fermé automatiquement
                 trade_data = {
@@ -1850,7 +1881,18 @@ class ScalpingBot:
                     'execution_source': 'binance_automatic',
                     'automatic_order_id': trade.stop_loss_order_id
                 }
-                trade_validator.safe_log_trade(self.firebase_logger, trade_data)
+                
+                # 🔥 POINT 1: Try-catch renforcé avec TradeValidator intégré + Log de confirmation
+                try:
+                    validator = TradeValidator()
+                    success = validator.safe_log_trade(self.firebase_logger, trade_data)
+                    if success:
+                        self.logger.info(f"✅ Trade CLOSE automatique loggué Firebase pour {trade.pair} à {exit_price:.4f} USDC")
+                    else:
+                        self.logger.warning(f"⚠️ Échec log Firebase trade CLOSE automatique pour {trade.pair}")
+                except Exception as log_error:
+                    error_uuid = str(uuid.uuid4())
+                    self.logger.error(f"❌ Erreur log Firebase trade CLOSE automatique {trade.pair} (Error UUID: {error_uuid}): {log_error}")
             
             # 🔥 Suppression de la position sauvegardée en Firebase
             try:
@@ -2749,23 +2791,29 @@ class ScalpingBot:
             
             # Firebase logging pour trade fermé
             if self.firebase_logger:
-                self.firebase_logger.log_message(
-                    level="INFO",
-                    message=f"{pnl_symbol} TRADE FERMÉ: {symbol} - P&L: {pnl_amount:+.2f} USDC ({pnl_percent:+.2f}%)",
-                    module="trade_execution",
-                    trade_id=trade_id,
-                    pair=symbol,
-                    capital=total_capital,
-                    additional_data={
-                        'exit_price': exit_price,
-                        'exit_reason': reason,
-                        'pnl_amount': pnl_amount,
-                        'pnl_percent': pnl_percent,
-                        'duration_seconds': trade.duration.total_seconds() if trade.duration else 0,
-                        'daily_pnl': self.daily_pnl,
-                        'daily_trades': self.daily_trades
-                    }
-                )
+                try:
+                    self.firebase_logger.log_message(
+                        level="INFO",
+                        message=f"{pnl_symbol} TRADE FERMÉ: {symbol} - P&L: {pnl_amount:+.2f} USDC ({pnl_percent:+.2f}%)",
+                        module="trade_execution",
+                        trade_id=trade_id,
+                        pair=symbol,
+                        capital=total_capital,
+                        additional_data={
+                            'exit_price': exit_price,
+                            'exit_reason': reason,
+                            'pnl_amount': pnl_amount,
+                            'pnl_percent': pnl_percent,
+                            'duration_seconds': trade.duration.total_seconds() if trade.duration else 0,
+                            'daily_pnl': self.daily_pnl,
+                            'daily_trades': self.daily_trades
+                        }
+                    )
+                    self.logger.info(f"✅ Trade CLOSE message loggué Firebase pour {symbol} - P&L: {pnl_amount:+.2f} USDC")
+                    
+                except Exception as log_error:
+                    error_uuid = str(uuid.uuid4())
+                    self.logger.error(f"❌ Erreur log_message Firebase trade CLOSE {symbol} (Error UUID: {error_uuid}): {log_error}")
             
             # Notification Telegram
             total_capital = self.get_total_capital()
@@ -2814,7 +2862,14 @@ class ScalpingBot:
                         'pnl_gross': pnl_amount,
                         'pnl_net': pnl_amount  # À ajuster si vous avez des frais à déduire
                     }
-                    trade_validator.safe_log_trade(self.firebase_logger, trade_data)
+                    
+                    # 🔥 POINT 1: Try-catch renforcé avec TradeValidator intégré + Log de confirmation
+                    validator = TradeValidator()
+                    success = validator.safe_log_trade(self.firebase_logger, trade_data)
+                    if success:
+                        self.logger.info(f"✅ Trade CLOSE loggué Firebase pour {trade.pair} à {exit_price:.4f} USDC (P&L: {pnl_amount:+.2f})")
+                    else:
+                        self.logger.warning(f"⚠️ Échec log Firebase trade CLOSE pour {trade.pair}")
                 except Exception as e:
                     self.logger.error(f"❌ Erreur log Firebase fermeture: {e}")
             
@@ -2914,7 +2969,14 @@ class ScalpingBot:
                         'pnl_gross': pnl_amount,
                         'pnl_net': pnl_amount  # Pas de frais en fermeture virtuelle
                     }
-                    trade_validator.safe_log_trade(self.firebase_logger, trade_data)
+                    
+                    # 🔥 POINT 1: Try-catch renforcé avec TradeValidator intégré + Log de confirmation
+                    validator = TradeValidator()
+                    success = validator.safe_log_trade(self.firebase_logger, trade_data)
+                    if success:
+                        self.logger.info(f"✅ Trade CLOSE VIRTUEL loggué Firebase pour {trade.pair} à {exit_price:.4f} USDC (P&L: {pnl_amount:+.2f})")
+                    else:
+                        self.logger.warning(f"⚠️ Échec log Firebase trade CLOSE VIRTUEL pour {trade.pair}")
                 except Exception as e:
                     self.logger.error(f"❌ Erreur log Firebase fermeture virtuelle: {e}")
             
@@ -3609,4 +3671,5 @@ class ScalpingBot:
                 self.firebase_logger.log_metric("market_volatility", avg_volatility)
             
         except Exception as e:
+            self.logger.error(f"❌ Erreur vérification volatilité marché: {e}")
             self.logger.error(f"❌ Erreur vérification volatilité marché: {e}")
