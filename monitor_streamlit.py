@@ -9,34 +9,49 @@ import time
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 
+import firebase_admin
 import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 from binance.client import Client
-from dotenv import load_dotenv
+from firebase_admin import credentials, firestore
 
-# Import de l'auditeur amélioré
+# Import de l'auditeur amélioré et Firebase direct
 from audit_trades_simple import TradeAuditorSimple
-from utils.firebase_logger import FirebaseLogger
 
 
 class TradingMonitor:
     """Monitoring en temps réel des trades avec interface Streamlit"""
     
     def __init__(self):
-        load_dotenv()
         self.setup_binance_client()
         self.setup_firebase()
-        self.auditor = TradeAuditorSimple(self.binance_client, self.firebase_logger.firestore_db)
+        self.auditor = TradeAuditorSimple(self.binance_client, self.firebase_db)
         
     def setup_binance_client(self):
         """Configuration du client Binance"""
         try:
+            # Essayer d'abord les secrets Streamlit Cloud
+            if hasattr(st, 'secrets') and 'binance' in st.secrets:
+                api_key = st.secrets['binance']['api_key']
+                api_secret = st.secrets['binance']['api_secret']
+                st.success("🔑 Binance configuré avec les secrets Streamlit Cloud")
+            else:
+                # Fallback sur les variables d'environnement locales
+                from dotenv import load_dotenv
+                load_dotenv()
+                api_key = os.getenv('BINANCE_API_KEY')
+                api_secret = os.getenv('BINANCE_SECRET_KEY')
+                st.success("🔑 Binance configuré avec les variables locales")
+            
+            if not api_key or not api_secret:
+                raise ValueError("Clés API Binance manquantes")
+                
             self.binance_client = Client(
-                api_key=os.getenv('BINANCE_API_KEY'),
-                api_secret=os.getenv('BINANCE_SECRET_KEY')
+                api_key=api_key,
+                api_secret=api_secret
             )
         except Exception as e:
             st.error(f"❌ Erreur Binance: {e}")
@@ -45,7 +60,27 @@ class TradingMonitor:
     def setup_firebase(self):
         """Configuration Firebase"""
         try:
-            self.firebase_logger = FirebaseLogger()
+            # Essayer de récupérer une app Firebase existante
+            try:
+                app = firebase_admin.get_app()
+                self.firebase_db = firestore.client(app)
+                st.success("🔥 Firebase réutilisé")
+            except ValueError:
+                # Aucune app existe, donc on peut l'initialiser
+                # Essayer d'abord les secrets Streamlit Cloud
+                if hasattr(st, 'secrets') and 'firebase' in st.secrets:
+                    firebase_credentials = dict(st.secrets['firebase'])
+                    cred = credentials.Certificate(firebase_credentials)
+                    app = firebase_admin.initialize_app(cred)
+                    self.firebase_db = firestore.client(app)
+                    st.success("🔥 Firebase initialisé avec les secrets Streamlit Cloud")
+                else:
+                    # Fallback sur le fichier local
+                    cred = credentials.Certificate('firebase_credentials.json')
+                    app = firebase_admin.initialize_app(cred)
+                    self.firebase_db = firestore.client(app)
+                    st.success("🔥 Firebase initialisé avec le fichier local")
+                    
         except Exception as e:
             st.error(f"❌ Erreur Firebase: {e}")
             raise
