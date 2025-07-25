@@ -1427,6 +1427,11 @@ class ScalpingBot:
                     trade.stop_loss_order_id = stop_loss_order_id
                     trade.take_profit_order_id = take_profit_order_id
                     self.logger.info(f"✅ OCO complet créé - SL: {stop_loss_order_id}, TP: {take_profit_order_id}")
+                    
+                    # 🔥 NOUVEAU: Log résumé des ordres automatiques
+                    self.logger.info(f"🎯 TP/SL automatique placé via Binance pour {symbol}")
+                    self.logger.info(f"   🛑 Stop Loss: {trade.stop_loss:.4f} USDC (ID: {stop_loss_order_id})")
+                    self.logger.info(f"   🎯 Take Profit: {trade.take_profit:.4f} USDC (ID: {take_profit_order_id})")
                 else:
                     # Option 2: Fallback - créer séparément
                     self.logger.info(f"🔄 Fallback: création d'ordres séparés pour {symbol}")
@@ -1448,6 +1453,14 @@ class ScalpingBot:
                     else:
                         self.logger.warning(f"⚠️ Impossible de créer take profit automatique pour {symbol}")
                         trade.take_profit_order_id = None
+                    
+                    # 🔥 NOUVEAU: Log résumé des ordres séparés
+                    if trade.stop_loss_order_id or trade.take_profit_order_id:
+                        self.logger.info(f"🎯 TP/SL automatique placé via Binance pour {symbol}")
+                        if trade.stop_loss_order_id:
+                            self.logger.info(f"   🛑 Stop Loss: {trade.stop_loss:.4f} USDC (ID: {trade.stop_loss_order_id})")
+                        if trade.take_profit_order_id:
+                            self.logger.info(f"   🎯 Take Profit: {trade.take_profit:.4f} USDC (ID: {trade.take_profit_order_id})")
                         
             except Exception as e:
                 # Gestion spécifique du solde insuffisant
@@ -1729,6 +1742,28 @@ class ScalpingBot:
                 )
                 
                 self.logger.info(f"✅ Stop Loss automatique créé: ID {stop_order['orderId']}")
+                
+                # 🔥 NOUVEAU: Logging Firebase pour traçabilité
+                if self.firebase_logger:
+                    try:
+                        self.firebase_logger.log_message(
+                            level="INFO",
+                            message=f"✅ STOP LOSS AUTOMATIQUE CRÉÉ: {symbol} - Prix: {stop_price:.4f} USDC",
+                            module="automatic_orders",
+                            additional_data={
+                                'order_type': 'STOP_LOSS',
+                                'symbol': symbol,
+                                'order_id': stop_order['orderId'],
+                                'stop_price': stop_price,
+                                'limit_price': limit_price,
+                                'quantity': quantity,
+                                'side': 'SELL',
+                                'binance_response': stop_order
+                            }
+                        )
+                    except Exception as e:
+                        self.logger.error(f"❌ Erreur log Firebase SL: {e}")
+                
                 return str(stop_order['orderId'])
                 
             except Exception as e:
@@ -1805,6 +1840,27 @@ class ScalpingBot:
             )
             
             self.logger.info(f"✅ Take Profit automatique créé: ID {tp_order['orderId']}")
+            
+            # 🔥 NOUVEAU: Logging Firebase pour traçabilité
+            if self.firebase_logger:
+                try:
+                    self.firebase_logger.log_message(
+                        level="INFO",
+                        message=f"✅ TAKE PROFIT AUTOMATIQUE CRÉÉ: {symbol} - Prix: {take_profit_price:.4f} USDC",
+                        module="automatic_orders",
+                        additional_data={
+                            'order_type': 'TAKE_PROFIT',
+                            'symbol': symbol,
+                            'order_id': tp_order['orderId'],
+                            'price': take_profit_price,
+                            'quantity': quantity,
+                            'side': 'SELL',
+                            'binance_response': tp_order
+                        }
+                    )
+                except Exception as e:
+                    self.logger.error(f"❌ Erreur log Firebase TP: {e}")
+            
             return str(tp_order['orderId'])
                 
         except Exception as e:
@@ -1850,6 +1906,30 @@ class ScalpingBot:
                     take_profit_id = str(order['orderId'])
             
             self.logger.info(f"✅ OCO complet créé - SL: {stop_loss_id}, TP: {take_profit_id}")
+            
+            # 🔥 NOUVEAU: Logging Firebase pour traçabilité OCO
+            if self.firebase_logger:
+                try:
+                    self.firebase_logger.log_message(
+                        level="INFO",
+                        message=f"✅ OCO COMPLET CRÉÉ: {symbol} - SL: {stop_price:.4f} USDC, TP: {take_profit_price:.4f} USDC",
+                        module="automatic_orders",
+                        additional_data={
+                            'order_type': 'OCO_COMPLETE',
+                            'symbol': symbol,
+                            'oco_order_list_id': oco_order.get('orderListId'),
+                            'stop_loss_order_id': stop_loss_id,
+                            'take_profit_order_id': take_profit_id,
+                            'stop_price': stop_price,
+                            'stop_limit_price': stop_limit_price,
+                            'take_profit_price': take_profit_price,
+                            'quantity': quantity,
+                            'binance_response': oco_order
+                        }
+                    )
+                except Exception as e:
+                    self.logger.error(f"❌ Erreur log Firebase OCO: {e}")
+            
             return stop_loss_id, take_profit_id
             
         except Exception as e:
@@ -2300,6 +2380,26 @@ class ScalpingBot:
             # Mettre à jour l'ordre stop loss sur Binance
             await self.update_binance_stop_loss(trade, new_trailing_stop)
             
+            # 🔥 NOUVEAU: Logging Firebase pour trailing stop
+            if self.firebase_logger:
+                try:
+                    self.firebase_logger.log_message(
+                        level="INFO",
+                        message=f"📈 TRAILING STOP DYNAMIQUE MIS À JOUR: {symbol} - Nouveau SL: {new_trailing_stop:.4f} USDC",
+                        module="automatic_orders",
+                        additional_data={
+                            'order_type': 'TRAILING_STOP_UPDATE',
+                            'symbol': symbol,
+                            'old_trailing_stop': old_trailing_stop,
+                            'new_trailing_stop': new_trailing_stop,
+                            'current_price': current_price,
+                            'profit_percent': profit_percent,
+                            'new_stop_loss_order_id': trade.stop_loss_order_id
+                        }
+                    )
+                except Exception as e:
+                    self.logger.error(f"❌ Erreur log Firebase trailing: {e}")
+            
             return True
             
         except Exception as e:
@@ -2341,6 +2441,28 @@ class ScalpingBot:
             trade.stop_loss = new_stop_price  # Mettre à jour aussi le stop loss du trade
             
             self.logger.info(f"✅ Stop loss Binance mis à jour: {trade.stop_loss_order_id}")
+            
+            # 🔥 NOUVEAU: Logging Firebase pour mise à jour ordre
+            if self.firebase_logger:
+                try:
+                    self.firebase_logger.log_message(
+                        level="INFO",
+                        message=f"🔄 STOP LOSS BINANCE MIS À JOUR: {symbol} - Nouveau prix: {stop_price:.4f} USDC",
+                        module="automatic_orders",
+                        additional_data={
+                            'order_type': 'STOP_LOSS_UPDATE',
+                            'symbol': symbol,
+                            'old_order_id': getattr(trade, 'old_stop_loss_order_id', None),
+                            'new_order_id': trade.stop_loss_order_id,
+                            'new_stop_price': stop_price,
+                            'new_limit_price': limit_price,
+                            'quantity': quantity,
+                            'binance_response': new_stop_order
+                        }
+                    )
+                except Exception as e:
+                    self.logger.error(f"❌ Erreur log Firebase mise à jour SL: {e}")
+            
             
         except Exception as e:
             self.logger.error(f"❌ Erreur mise à jour stop loss Binance: {e}")
