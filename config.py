@@ -19,7 +19,7 @@ class TradingConfig:
     # Paramètres de capital USDC
     DAILY_TARGET_PERCENT: float = 1.0  # Objectif quotidien +1%
     DAILY_STOP_LOSS_PERCENT: float = 2.0  # Stop loss quotidien étendu pour capital élevé
-    BASE_POSITION_SIZE_PERCENT: float = 25.0  # 25% du capital USDC
+    BASE_POSITION_SIZE_PERCENT: float = 30.0  # 30% du capital USDC
     MIN_POSITION_SIZE_USDC: float = 500.0  # Taille minimale 500$ par trade
     MAX_POSITION_SIZE_USDC: float = 5000.0  # Taille maximale 5000$ par trade
     
@@ -33,8 +33,8 @@ class TradingConfig:
     TRAILING_STEP_PERCENT: float = 0.2  # Step trailing plus fin
     
     # Paramètres anti-fragmentation - OPTIMISÉS ANTI-SURTRADING
-    MIN_TRADE_INTERVAL_SECONDS: int = 300  # OPTIMISÉ: Minimum 5 minutes entre trades
-    MAX_TRADES_PER_HOUR: int = 2  # OPTIMISÉ: Maximum 2 trades par heure
+    MIN_TRADE_INTERVAL_SECONDS: int = 120  # OPTIMISÉ: Minimum 2 minutes entre trades
+    MAX_TRADES_PER_HOUR: int = 4  # OPTIMISÉ: Maximum 4 trades par heure
     CONSOLIDATE_SMALL_TRADES: bool = True  # Consolider les petits trades
     
     # Paramètres de timeout adaptatifs
@@ -104,7 +104,7 @@ class TradingConfig:
     
     # OPTIMISÉ R2: Confirmation de cassure pour éviter faux signaux
     ENABLE_BREAKOUT_CONFIRMATION: bool = True  # Activer confirmation cassure
-    BREAKOUT_CONFIRMATION_PERCENT: float = 0.1  # Cassure confirmée si price > last_high + 0.1%
+    BREAKOUT_CONFIRMATION_PERCENT: float = 0.05  # Cassure confirmée si price > last_high + 0.05%
     
     # Paramètres de gestion des positions et soldes
     PHANTOM_POSITION_THRESHOLD: float = 0.00001  # Seuil position fantôme
