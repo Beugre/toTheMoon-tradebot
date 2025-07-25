@@ -98,20 +98,18 @@ check_config_files() {
     
     # Vérifier .env
     if [ ! -f "$PROJECT_DIR/.env" ]; then
-        log_error "Fichier .env manquant dans $PROJECT_DIR/"
-        log_error "Créez le fichier avec: BINANCE_API_KEY=... et BINANCE_SECRET_KEY=..."
-        exit 1
-    else
-        log_success "Fichier .env trouvé"
+        log_warning "Fichier .env manquant"
+        echo "Créez le fichier $PROJECT_DIR/.env avec:"
+        echo "BINANCE_API_KEY=your_api_key"
+        echo "BINANCE_SECRET_KEY=your_secret_key"
+        read -p "Appuyez sur Entrée quand c'est fait..."
     fi
     
     # Vérifier firebase_credentials.json
     if [ ! -f "$PROJECT_DIR/firebase_credentials.json" ]; then
-        log_error "Fichier firebase_credentials.json manquant dans $PROJECT_DIR/"
-        log_error "Copiez votre fichier Firebase credentials"
-        exit 1
-    else
-        log_success "Fichier firebase_credentials.json trouvé"
+        log_warning "Fichier firebase_credentials.json manquant"
+        echo "Copiez votre fichier Firebase credentials dans $PROJECT_DIR/"
+        read -p "Appuyez sur Entrée quand c'est fait..."
     fi
     
     log_success "Fichiers de configuration vérifiés"

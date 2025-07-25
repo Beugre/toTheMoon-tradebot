@@ -51,24 +51,16 @@ class TradeValidator:
         errors = []
         warnings = []
         
-        # Déterminer le type de trade (ouverture vs fermeture)
-        is_opening_trade = (
-            'side' in trade_data and trade_data['side'] == 'BUY' or
-            'direction' in trade_data and trade_data.get('exit_price') is None or
-            trade_data.get('pnl_amount') is None
-        )
+        # Validation des champs obligatoires selon l'action
+        action = trade_data.get('action', 'CLOSE')  # Par défaut: fermeture
         
-        # Validation des champs obligatoires selon le type de trade
-        if is_opening_trade:
-            # Pour les trades d'ouverture (BUY), pnl_amount peut être None ou 0
+        if action == 'OPEN':
+            # Pour l'ouverture: pas de pnl_amount requis
             required_fields = ['pair', 'capital_before', 'capital_after']
-            # Permettre pnl_amount None pour ouvertures
-            if 'pnl_amount' not in trade_data:
-                trade_data['pnl_amount'] = 0.0  # Définir comme 0 pour ouverture
         else:
-            # Pour les trades de fermeture (SELL), pnl_amount est obligatoire
+            # Pour la fermeture: pnl_amount obligatoire
             required_fields = ['pair', 'pnl_amount', 'capital_before', 'capital_after']
-        
+            
         for field in required_fields:
             if field not in trade_data or trade_data[field] is None:
                 errors.append(f"Champ obligatoire manquant: {field}")
@@ -77,25 +69,28 @@ class TradeValidator:
             return False, errors, warnings
         
         # Validation des valeurs
-        pnl = trade_data['pnl_amount']
         capital_before = trade_data['capital_before']
         capital_after = trade_data['capital_after']
         
-        # 1. Vérifier cohérence capital_before + pnl = capital_after
-        expected_capital_after = capital_before + pnl
-        diff = abs(capital_after - expected_capital_after)
-        if diff > 0.01:  # Tolérance de 1 centime
-            errors.append(f"Incohérence capital: {capital_before:.2f} + {pnl:.2f} ≠ {capital_after:.2f} (diff: {diff:.6f})")
-        
-        # 2. Vérifier seuils de perte
-        if pnl < -self.max_loss_threshold:
-            errors.append(f"Perte excessive: {pnl:.2f} USDC > seuil {self.max_loss_threshold} USDC")
-        
-        # 3. Vérifier pourcentage de perte
-        if capital_before > 0:
-            loss_percentage = abs(pnl) / capital_before
-            if pnl < 0 and loss_percentage > self.max_loss_percentage:
-                errors.append(f"Perte % excessive: {loss_percentage*100:.2f}% > seuil {self.max_loss_percentage*100:.2f}%")
+        # Si c'est une fermeture de trade, valider le P&L
+        if action != 'OPEN' and 'pnl_amount' in trade_data:
+            pnl = trade_data['pnl_amount']
+            
+            # 1. Vérifier cohérence capital_before + pnl = capital_after
+            expected_capital_after = capital_before + pnl
+            diff = abs(capital_after - expected_capital_after)
+            if diff > 0.01:  # Tolérance de 1 centime
+                errors.append(f"Incohérence capital: {capital_before:.2f} + {pnl:.2f} ≠ {capital_after:.2f} (diff: {diff:.6f})")
+            
+            # 2. Vérifier seuils de perte
+            if pnl < -self.max_loss_threshold:
+                errors.append(f"Perte excessive: {pnl:.2f} USDC > seuil {self.max_loss_threshold} USDC")
+            
+            # 3. Vérifier pourcentage de perte
+            if capital_before > 0:
+                loss_percentage = abs(pnl) / capital_before
+                if pnl < 0 and loss_percentage > self.max_loss_percentage:
+                    errors.append(f"Perte % excessive: {loss_percentage*100:.2f}% > seuil {self.max_loss_percentage*100:.2f}%")
         
         # 4. Vérifier valeurs positives
         if capital_before <= 0:
@@ -103,9 +98,11 @@ class TradeValidator:
         if capital_after <= 0:
             errors.append(f"Capital_after invalide: {capital_after}")
         
-        # Warnings
-        if abs(pnl) > 50:
-            warnings.append(f"P&L élevé: {pnl:.2f} USDC")
+        # Warnings (même pour ouverture)
+        if action != 'OPEN' and 'pnl_amount' in trade_data:
+            pnl = trade_data['pnl_amount']
+            if abs(pnl) > 50:
+                warnings.append(f"P&L élevé: {pnl:.2f} USDC")
         
         return len(errors) == 0, errors, warnings
     
@@ -788,21 +785,12 @@ class ScalpingBot:
                     "reason": ""
                 }
 
-                # Exclusion des paires blacklistées (statique + dynamique)
+                # Exclusion des paires blacklistées
                 if symbol in BLACKLISTED_PAIRS:
                     exclusion_stats['blacklisted'] += 1
                     excluded_pairs['blacklisted'].append(symbol)
                     decision["final_decision"] = "REJECTED"
-                    decision["reason"] = "Blacklisted pair (static)"
-                    detailed_decisions.append(decision)
-                    continue
-                
-                # 🔥 NOUVEAU: Vérification blacklist dynamique (gaps excessifs)
-                if hasattr(self, 'dynamic_blacklist') and symbol in self.dynamic_blacklist:
-                    exclusion_stats['blacklisted'] += 1
-                    excluded_pairs['blacklisted'].append(symbol)
-                    decision["final_decision"] = "REJECTED"
-                    decision["reason"] = f"Blacklisted pair (dynamic - excessive gaps)"
+                    decision["reason"] = "Blacklisted pair"
                     detailed_decisions.append(decision)
                     continue
                 
@@ -1447,46 +1435,46 @@ class ScalpingBot:
                 try:
                     # Option 1: Essayer d'abord un OCO complet (plus efficace)
                     stop_loss_order_id, take_profit_order_id = await self.create_oco_complete_order(trade, symbol, quantity)
+                
+                if stop_loss_order_id and take_profit_order_id:
+                    # OCO créé avec succès
+                    trade.stop_loss_order_id = stop_loss_order_id
+                    trade.take_profit_order_id = take_profit_order_id
+                    self.logger.info(f"✅ OCO complet créé - SL: {stop_loss_order_id}, TP: {take_profit_order_id}")
                     
-                    if stop_loss_order_id and take_profit_order_id:
-                        # OCO créé avec succès
+                    # 🔥 NOUVEAU: Log résumé des ordres automatiques
+                    self.logger.info(f"🎯 TP/SL automatique placé via Binance pour {symbol}")
+                    self.logger.info(f"   🛑 Stop Loss: {trade.stop_loss:.4f} USDC (ID: {stop_loss_order_id})")
+                    self.logger.info(f"   🎯 Take Profit: {trade.take_profit:.4f} USDC (ID: {take_profit_order_id})")
+                else:
+                    # Option 2: Fallback - créer séparément
+                    self.logger.info(f"🔄 Fallback: création d'ordres séparés pour {symbol}")
+                    
+                    # Créer Stop Loss
+                    stop_loss_order_id = await self.create_automatic_stop_loss(trade, symbol, quantity)
+                    if stop_loss_order_id:
                         trade.stop_loss_order_id = stop_loss_order_id
-                        trade.take_profit_order_id = take_profit_order_id
-                        self.logger.info(f"✅ OCO complet créé - SL: {stop_loss_order_id}, TP: {take_profit_order_id}")
-                        
-                        # 🔥 NOUVEAU: Log résumé des ordres automatiques
-                        self.logger.info(f"🎯 TP/SL automatique placé via Binance pour {symbol}")
-                        self.logger.info(f"   🛑 Stop Loss: {trade.stop_loss:.4f} USDC (ID: {stop_loss_order_id})")
-                        self.logger.info(f"   🎯 Take Profit: {trade.take_profit:.4f} USDC (ID: {take_profit_order_id})")
+                        self.logger.info(f"🛑 Stop Loss automatique créé: {stop_loss_order_id}")
                     else:
-                        # Option 2: Fallback - créer séparément
-                        self.logger.info(f"🔄 Fallback: création d'ordres séparés pour {symbol}")
-                        
-                        # Créer Stop Loss
-                        stop_loss_order_id = await self.create_automatic_stop_loss(trade, symbol, quantity)
-                        if stop_loss_order_id:
-                            trade.stop_loss_order_id = stop_loss_order_id
-                            self.logger.info(f"🛑 Stop Loss automatique créé: {stop_loss_order_id}")
-                        else:
-                            self.logger.warning(f"⚠️ Impossible de créer stop loss automatique pour {symbol}")
-                            trade.stop_loss_order_id = None
-                        
-                        # Créer Take Profit  
-                        take_profit_order_id = await self.create_automatic_take_profit(trade, symbol, quantity)
-                        if take_profit_order_id:
-                            trade.take_profit_order_id = take_profit_order_id
-                            self.logger.info(f"🎯 Take Profit automatique créé: {take_profit_order_id}")
-                        else:
-                            self.logger.warning(f"⚠️ Impossible de créer take profit automatique pour {symbol}")
-                            trade.take_profit_order_id = None
-                        
-                        # 🔥 NOUVEAU: Log résumé des ordres séparés
-                        if trade.stop_loss_order_id or trade.take_profit_order_id:
-                            self.logger.info(f"🎯 TP/SL automatique placé via Binance pour {symbol}")
-                            if trade.stop_loss_order_id:
-                                self.logger.info(f"   🛑 Stop Loss: {trade.stop_loss:.4f} USDC (ID: {trade.stop_loss_order_id})")
-                            if trade.take_profit_order_id:
-                                self.logger.info(f"   🎯 Take Profit: {trade.take_profit:.4f} USDC (ID: {trade.take_profit_order_id})")
+                        self.logger.warning(f"⚠️ Impossible de créer stop loss automatique pour {symbol}")
+                        trade.stop_loss_order_id = None
+                    
+                    # Créer Take Profit  
+                    take_profit_order_id = await self.create_automatic_take_profit(trade, symbol, quantity)
+                    if take_profit_order_id:
+                        trade.take_profit_order_id = take_profit_order_id
+                        self.logger.info(f"🎯 Take Profit automatique créé: {take_profit_order_id}")
+                    else:
+                        self.logger.warning(f"⚠️ Impossible de créer take profit automatique pour {symbol}")
+                        trade.take_profit_order_id = None
+                    
+                    # 🔥 NOUVEAU: Log résumé des ordres séparés
+                    if trade.stop_loss_order_id or trade.take_profit_order_id:
+                        self.logger.info(f"🎯 TP/SL automatique placé via Binance pour {symbol}")
+                        if trade.stop_loss_order_id:
+                            self.logger.info(f"   🛑 Stop Loss: {trade.stop_loss:.4f} USDC (ID: {trade.stop_loss_order_id})")
+                        if trade.take_profit_order_id:
+                            self.logger.info(f"   🎯 Take Profit: {trade.take_profit:.4f} USDC (ID: {trade.take_profit_order_id})")
                         
                 except Exception as e:
                     # Gestion spécifique du solde insuffisant
@@ -1506,13 +1494,13 @@ class ScalpingBot:
                             except:
                                 pass
                     else:
-                        self.logger.error(f"❌ Erreur création stop loss automatique: {e}")
+                        self.logger.error(f"❌ Erreur création ordres automatiques {symbol}: {e}")
                     
-                    # Toujours initialiser l'attribut
+                    # Toujours initialiser les attributs en cas d'erreur
                     trade.stop_loss_order_id = None
+                    trade.take_profit_order_id = None
             else:
-                # Si les ordres automatiques sont désactivés
-                self.logger.info(f"⚙️ Ordres automatiques désactivés pour {symbol} - gestion manuelle via bot")
+                self.logger.info(f"🔧 Ordres automatiques désactivés pour {symbol} - surveillance manuelle")
                 trade.stop_loss_order_id = None
                 trade.take_profit_order_id = None
 
@@ -2657,22 +2645,21 @@ class ScalpingBot:
                         await self.close_position(trade_id, current_price, "MOMENTUM_FAIBLE")
                         continue
 
-                # Vérification Stop Loss avec protection gap configurée
+                # Vérification Stop Loss avec protection gap
                 if current_price <= trade.stop_loss:
-                    # Analyse du gap de marché avec paramètres configurables
+                    # Analyse du gap de marché
                     expected_loss = abs((trade.stop_loss - trade.entry_price) / trade.entry_price * 100)
                     actual_loss = abs((current_price - trade.entry_price) / trade.entry_price * 100)
                     gap_excess = actual_loss - expected_loss
                     
-                    # 🔥 NOUVEAU: Utilisation des paramètres anti-gap configurables
-                    if self.config.ENABLE_GAP_PROTECTION and gap_excess > self.config.GAP_PROTECTION_THRESHOLD:
+                    if gap_excess > 0.5:  # Gap significatif détecté
                         self.logger.error(f"🚨 GAP STOP LOSS {trade.pair}: Perte {actual_loss:.2f}% vs {expected_loss:.2f}% attendu (gap: {gap_excess:.2f}%)")
                         
                         # Firebase logging pour analyse des gaps
                         if self.firebase_logger:
                             self.firebase_logger.log_message(
                                 level="ERROR",
-                                message=f"🚨 GAP STOP LOSS: {trade.pair} - Gap: {gap_excess:.2f}% > seuil {self.config.GAP_PROTECTION_THRESHOLD}%",
+                                message=f"🚨 GAP STOP LOSS: {trade.pair} - Gap: {gap_excess:.2f}%",
                                 module="risk_management",
                                 pair=trade.pair,
                                 additional_data={
@@ -2682,53 +2669,9 @@ class ScalpingBot:
                                     'expected_loss_percent': expected_loss,
                                     'actual_loss_percent': actual_loss,
                                     'gap_excess_percent': gap_excess,
-                                    'gap_threshold': self.config.GAP_PROTECTION_THRESHOLD,
                                     'trade_duration': str(datetime.now() - trade.timestamp)
                                 }
                             )
-                            
-                        # 🔥 NOUVEAU: Blacklist automatique si activé
-                        if self.config.BLACKLIST_ON_EXCESSIVE_GAP:
-                            if not hasattr(self, 'gap_occurrences'):
-                                self.gap_occurrences = {}
-                            if trade.pair not in self.gap_occurrences:
-                                self.gap_occurrences[trade.pair] = []
-                            
-                            self.gap_occurrences[trade.pair].append({
-                                'timestamp': datetime.now(),
-                                'gap_percent': gap_excess,
-                                'expected_loss': expected_loss,
-                                'actual_loss': actual_loss
-                            })
-                            
-                            # Nettoyer les anciennes occurrences (fenêtre de détection)
-                            cutoff_time = datetime.now() - timedelta(hours=self.config.GAP_DETECTION_WINDOW)
-                            self.gap_occurrences[trade.pair] = [
-                                occ for occ in self.gap_occurrences[trade.pair] 
-                                if occ['timestamp'] > cutoff_time
-                            ]
-                            
-                            # Vérifier si dépasse le seuil d'occurrences
-                            if len(self.gap_occurrences[trade.pair]) >= self.config.MAX_GAP_OCCURRENCES:
-                                self.logger.error(f"🚫 BLACKLIST AUTOMATIQUE: {trade.pair} - {len(self.gap_occurrences[trade.pair])} gaps en {self.config.GAP_DETECTION_WINDOW}h")
-                                
-                                # Ajouter à la blacklist dynamique
-                                if not hasattr(self, 'dynamic_blacklist'):
-                                    self.dynamic_blacklist = set()
-                                self.dynamic_blacklist.add(trade.pair)
-                                
-                                # Notification Telegram
-                                if self.telegram_notifier:
-                                    try:
-                                        await self.telegram_notifier.send_message(
-                                            message=f"🚫 BLACKLIST AUTOMATIQUE\n\n"
-                                                   f"Paire: {trade.pair}\n"
-                                                   f"Raison: {len(self.gap_occurrences[trade.pair])} gaps > {self.config.GAP_PROTECTION_THRESHOLD}%\n"
-                                                   f"Période: {self.config.GAP_DETECTION_WINDOW}h\n"
-                                                   f"Dernier gap: {gap_excess:.2f}%"
-                                        )
-                                    except:
-                                        pass
                     
                     await self.close_position(trade_id, current_price, "STOP_LOSS")
                     continue

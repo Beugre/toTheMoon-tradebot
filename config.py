@@ -27,10 +27,17 @@ class TradingConfig:
     MAX_OPEN_POSITIONS: int = 3  # Moins de positions mais plus grosses
     MAX_TRADES_PER_PAIR: int = 1  # UN SEUL trade par paire max
     MAX_EXPOSURE_PER_ASSET_PERCENT: float = 30.0  # Exposition max par crypto (30% pour haute liquidité)
-    STOP_LOSS_PERCENT: float = 0.35  # SL plus serré pour limiter pertes
+    STOP_LOSS_PERCENT: float = 0.25  # 🔥 RÉDUIT: SL plus serré 0.25% (vs 0.35%) pour limiter les gaps
     TAKE_PROFIT_PERCENT: float = 1.2  # TP optimisé pour USDC haute liquidité
     TRAILING_ACTIVATION_PERCENT: float = 0.5  # OPTIMISÉ: Activation trailing à +0.5% (plus conservateur)
     TRAILING_STEP_PERCENT: float = 0.2  # Step trailing plus fin
+    
+    # 🔥 NOUVEAUX PARAMÈTRES - Protection anti-gaps
+    ENABLE_GAP_PROTECTION: bool = True  # Active la protection contre les gaps de marché
+    GAP_PROTECTION_THRESHOLD: float = 1.0  # Gap maximum autorisé en % (1.0% = 1%)
+    BLACKLIST_ON_EXCESSIVE_GAP: bool = True  # Blacklister automatiquement les paires avec gaps > seuil
+    GAP_DETECTION_WINDOW: int = 24  # Fenêtre d'analyse des gaps en heures (24h)
+    MAX_GAP_OCCURRENCES: int = 2  # Nombre max de gaps avant blacklist automatique
     
     # 🔥 NOUVEAUX PARAMÈTRES - Ordres automatiques Binance
     ENABLE_AUTOMATIC_ORDERS: bool = True  # Active la création automatique des ordres SL + TP
@@ -187,6 +194,7 @@ BLACKLISTED_PAIRS = [
     "ADAUSDC",  # Mauvaise performance (-15.58 USDC)
     "SUIUSDC",   # Mauvaise performance (-13.47 USDC)
     "SOLUSDC",  # Mauvaise performance (-77 USDC)
+    "ENAUSDC",  # 🚨 BLACKLISTÉ: Gaps excessifs détectés (1.65% gap vs 0.35% SL attendu)
 ]
 
 # Paires prioritaires USDC (haute liquidité) - OPTIMISÉES
