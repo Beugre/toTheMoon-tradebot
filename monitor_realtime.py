@@ -471,7 +471,7 @@ def display_trading_charts(binance_df: pd.DataFrame, binance_aggregated_df: pd.D
                 title="Volume de trading par paire (USDC) - Données Agrégées",
                 labels={'x': 'Paire', 'y': 'Volume USDC'}
             )
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, use_container_width=True, key="volume_by_pair_chart")
     
     with col2:
         # Comparaison fragmentation
@@ -484,20 +484,25 @@ def display_trading_charts(binance_df: pd.DataFrame, binance_aggregated_df: pd.D
                 title="Fragmentation moyenne par paire",
                 labels={'x': 'Paire', 'y': 'Fragments par ordre'}
             )
-            st.plotly_chart(fig, use_container_width=True)
-            # Agrégation par heure
-            binance_df['hour'] = binance_df['time'].dt.floor('h')
-            hourly_volume = binance_df.groupby(['hour', 'side'])['quoteQty'].sum().reset_index()
-            
-            fig = px.line(
-                hourly_volume, 
-                x='hour', 
-                y='quoteQty', 
-                color='side',
-                title="Volume horaire BUY vs SELL",
-                labels={'hour': 'Heure', 'quoteQty': 'Volume USDC'}
-            )
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, use_container_width=True, key="fragmentation_chart")
+    
+    # Section volume horaire (en dehors des colonnes)
+    if not binance_df.empty:
+        st.subheader("📈 Analyse Temporelle")
+        
+        # Agrégation par heure
+        binance_df['hour'] = binance_df['time'].dt.floor('h')
+        hourly_volume = binance_df.groupby(['hour', 'side'])['quoteQty'].sum().reset_index()
+        
+        fig = px.line(
+            hourly_volume, 
+            x='hour', 
+            y='quoteQty', 
+            color='side',
+            title="Volume horaire BUY vs SELL",
+            labels={'hour': 'Heure', 'quoteQty': 'Volume USDC'}
+        )
+        st.plotly_chart(fig, use_container_width=True, key="hourly_volume_chart")
 
 
 def display_data_comparison(binance_aggregated_df: pd.DataFrame, firebase_df: pd.DataFrame, quarantined_df: pd.DataFrame, total_fragments: int):
