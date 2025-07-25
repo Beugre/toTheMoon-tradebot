@@ -169,6 +169,9 @@ class Trade:
     capital_after: Optional[float] = None   # AJOUTÉ: Capital après le trade
     db_id: Optional[int] = None
     stop_loss_order_id: Optional[str] = None  # AJOUTÉ: ID ordre stop loss automatique
+    take_profit_order_id: Optional[str] = None  # AJOUTÉ: ID ordre take profit automatique
+    trailing_stop_order_id: Optional[str] = None  # AJOUTÉ: ID ordre trailing stop automatique
+    last_trailing_update: Optional[datetime] = None  # AJOUTÉ: Dernière mise à jour trailing
 
 @dataclass
 class PairScore:
@@ -359,7 +362,12 @@ class ScalpingBot:
                         'trailing_stop': getattr(trade, 'trailing_stop', 0),
                         'direction': trade.direction.value if hasattr(trade.direction, 'value') else str(trade.direction),
                         'saved_at': datetime.now().isoformat(),
-                        'session_id': self.firebase_logger.session_id
+                        'session_id': self.firebase_logger.session_id,
+                        # 🔥 NOUVEAUX CHAMPS pour ordres automatiques
+                        'stop_loss_order_id': getattr(trade, 'stop_loss_order_id', None),
+                        'take_profit_order_id': getattr(trade, 'take_profit_order_id', None),
+                        'trailing_stop_order_id': getattr(trade, 'trailing_stop_order_id', None),
+                        'last_trailing_update': getattr(trade, 'last_trailing_update', None).isoformat() if getattr(trade, 'last_trailing_update', None) is not None else None
                     }
                     
                     # Sauvegarde en Firebase Firestore
@@ -421,7 +429,10 @@ class ScalpingBot:
                             take_profit=float(position_data['take_profit']),
                             trailing_stop=float(position_data.get('trailing_stop', 0)),
                             timestamp=datetime.fromisoformat(position_data['timestamp']),
-                            stop_loss_order_id=position_data.get('stop_loss_order_id')  # Restaurer l'ID ordre si disponible
+                            stop_loss_order_id=position_data.get('stop_loss_order_id'),  # Restaurer l'ID ordre SL
+                            take_profit_order_id=position_data.get('take_profit_order_id'),  # 🔥 NOUVEAU: Restaurer l'ID ordre TP
+                            trailing_stop_order_id=position_data.get('trailing_stop_order_id'),  # 🔥 NOUVEAU: Restaurer l'ID ordre trailing
+                            last_trailing_update=datetime.fromisoformat(position_data['last_trailing_update']) if position_data.get('last_trailing_update') else None  # 🔥 NOUVEAU: Restaurer dernière mise à jour
                         )
                         
                         # S'assurer que le statut est OPEN
@@ -435,6 +446,13 @@ class ScalpingBot:
                         self.logger.info(f"   💰 Prix entrée: {trade.entry_price:.4f}")
                         self.logger.info(f"   🛑 Stop Loss: {trade.stop_loss:.4f}")
                         self.logger.info(f"   🎯 Take Profit: {trade.take_profit:.4f}")
+                        # 🔥 NOUVEAU: Afficher les IDs d'ordres restaurés
+                        if trade.stop_loss_order_id:
+                            self.logger.info(f"   🛑 Stop Loss Order ID: {trade.stop_loss_order_id}")
+                        if trade.take_profit_order_id:
+                            self.logger.info(f"   🎯 Take Profit Order ID: {trade.take_profit_order_id}")
+                        if trade.trailing_stop_order_id:
+                            self.logger.info(f"   📈 Trailing Stop Order ID: {trade.trailing_stop_order_id}")
                         
                     else:
                         self.logger.warning(f"⚠️ Position {pair} ignorée - solde insuffisant")
@@ -1399,29 +1417,52 @@ class ScalpingBot:
             trade_id = f"{symbol}_{trade.id}_{int(datetime.now().timestamp())}"
             self.open_positions[trade_id] = trade
 
-            # 🛑 CRÉATION D'ORDRES STOP LOSS AUTOMATIQUES BINANCE
+            # 🛑 CRÉATION D'ORDRES AUTOMATIQUES BINANCE (Stop Loss + Take Profit)
             try:
-                stop_loss_order_id = await self.create_automatic_stop_loss(trade, symbol, quantity)
-                if stop_loss_order_id:
+                # Option 1: Essayer d'abord un OCO complet (plus efficace)
+                stop_loss_order_id, take_profit_order_id = await self.create_oco_complete_order(trade, symbol, quantity)
+                
+                if stop_loss_order_id and take_profit_order_id:
+                    # OCO créé avec succès
                     trade.stop_loss_order_id = stop_loss_order_id
-                    self.logger.info(f"🛑 Stop Loss automatique créé: {stop_loss_order_id}")
+                    trade.take_profit_order_id = take_profit_order_id
+                    self.logger.info(f"✅ OCO complet créé - SL: {stop_loss_order_id}, TP: {take_profit_order_id}")
                 else:
-                    self.logger.warning(f"⚠️ Impossible de créer stop loss automatique pour {symbol}")
-                    # Initialiser l'attribut même si la création échoue
-                    trade.stop_loss_order_id = None
+                    # Option 2: Fallback - créer séparément
+                    self.logger.info(f"🔄 Fallback: création d'ordres séparés pour {symbol}")
+                    
+                    # Créer Stop Loss
+                    stop_loss_order_id = await self.create_automatic_stop_loss(trade, symbol, quantity)
+                    if stop_loss_order_id:
+                        trade.stop_loss_order_id = stop_loss_order_id
+                        self.logger.info(f"🛑 Stop Loss automatique créé: {stop_loss_order_id}")
+                    else:
+                        self.logger.warning(f"⚠️ Impossible de créer stop loss automatique pour {symbol}")
+                        trade.stop_loss_order_id = None
+                    
+                    # Créer Take Profit  
+                    take_profit_order_id = await self.create_automatic_take_profit(trade, symbol, quantity)
+                    if take_profit_order_id:
+                        trade.take_profit_order_id = take_profit_order_id
+                        self.logger.info(f"🎯 Take Profit automatique créé: {take_profit_order_id}")
+                    else:
+                        self.logger.warning(f"⚠️ Impossible de créer take profit automatique pour {symbol}")
+                        trade.take_profit_order_id = None
+                        
             except Exception as e:
                 # Gestion spécifique du solde insuffisant
                 if "insufficient balance" in str(e).lower():
-                    self.logger.error(f"💰 Solde insuffisant pour stop loss automatique {symbol} - position sera gérée manuellement")
+                    self.logger.error(f"💰 Solde insuffisant pour ordres automatiques {symbol} - position sera gérée manuellement")
                     # Envoyer notification Telegram pour attention manuelle
                     if self.telegram_notifier:
                         try:
                             await self.telegram_notifier.send_message(
                                 message=f"⚠️ ATTENTION MANUELLE REQUISE\n\n"
                                        f"Position: {symbol}\n"
-                                       f"Problème: Solde insuffisant pour stop loss automatique\n"
+                                       f"Problème: Solde insuffisant pour ordres automatiques\n"
                                        f"Action: Surveillance manuelle nécessaire\n"
-                                       f"Stop Loss: {trade.stop_loss:.4f} USDC"
+                                       f"Stop Loss: {trade.stop_loss:.4f} USDC\n"
+                                       f"Take Profit: {trade.take_profit:.4f} USDC"
                             )
                         except:
                             pass
@@ -1446,7 +1487,11 @@ class ScalpingBot:
                         'direction': direction.value if hasattr(direction, 'value') else str(direction),
                         'saved_at': datetime.now().isoformat(),
                         'session_id': self.firebase_logger.session_id,
-                        'stop_loss_order_id': trade.stop_loss_order_id  # Sauvegarder l'ID ordre stop loss
+                        'stop_loss_order_id': trade.stop_loss_order_id,  # Sauvegarder l'ID ordre stop loss
+                        # 🔥 NOUVEAUX CHAMPS pour ordres automatiques
+                        'take_profit_order_id': getattr(trade, 'take_profit_order_id', None),
+                        'trailing_stop_order_id': getattr(trade, 'trailing_stop_order_id', None),
+                        'last_trailing_update': None  # Nouveau trade, pas encore de trailing update
                     }
                     self.firebase_logger.firestore_db.collection('position_states').document(trade_id).set(position_data)
                     self.logger.debug(f"🔥 Position {trade_id} sauvegardée en Firebase")
@@ -1736,6 +1781,80 @@ class ScalpingBot:
         except Exception as e:
             self.logger.error(f"❌ OCO non supporté pour {symbol}: {e}")
             return None
+
+    async def create_automatic_take_profit(self, trade, symbol: str, quantity: float) -> Optional[str]:
+        """Crée un ordre take profit automatique sur Binance"""
+        try:
+            # Prix de take profit
+            take_profit_price = trade.take_profit
+            take_profit_price = self.round_price(symbol, take_profit_price)
+            quantity = self.round_quantity(symbol, quantity)
+            
+            self.logger.info(f"🎯 Création take profit automatique {symbol}:")
+            self.logger.info(f"   📊 Quantité: {quantity:.8f}")
+            self.logger.info(f"   💰 Prix take profit: {take_profit_price:.4f} USDC")
+            
+            # Création ordre LIMIT pour take profit
+            tp_order = self.binance_client.create_order(
+                symbol=symbol,
+                side='SELL',
+                type='LIMIT',
+                timeInForce='GTC',
+                quantity=quantity,
+                price=take_profit_price
+            )
+            
+            self.logger.info(f"✅ Take Profit automatique créé: ID {tp_order['orderId']}")
+            return str(tp_order['orderId'])
+                
+        except Exception as e:
+            self.logger.error(f"❌ Erreur création take profit automatique pour {symbol}: {e}")
+            return None
+
+    async def create_oco_complete_order(self, trade, symbol: str, quantity: float) -> tuple[Optional[str], Optional[str]]:
+        """Crée un ordre OCO complet avec stop loss ET take profit"""
+        try:
+            # Prix pour l'ordre OCO
+            stop_price = trade.stop_loss
+            stop_limit_price = stop_price * 0.995
+            take_profit_price = trade.take_profit
+            
+            # Arrondir les prix
+            stop_price = self.round_price(symbol, stop_price)
+            stop_limit_price = self.round_price(symbol, stop_limit_price)
+            take_profit_price = self.round_price(symbol, take_profit_price)
+            quantity = self.round_quantity(symbol, quantity)
+            
+            self.logger.info(f"🔄 Création OCO complet pour {symbol}")
+            self.logger.info(f"   🎯 Take Profit: {take_profit_price:.4f} USDC")
+            self.logger.info(f"   🛑 Stop Loss: {stop_price:.4f} USDC")
+            
+            oco_order = self.binance_client.create_oco_order(
+                symbol=symbol,
+                side='SELL',
+                quantity=quantity,
+                price=take_profit_price,  # Take profit
+                stopPrice=stop_price,     # Stop loss trigger
+                stopLimitPrice=stop_limit_price,  # Stop limit
+                stopLimitTimeInForce='GTC'
+            )
+            
+            # Récupérer les IDs des deux ordres
+            stop_loss_id = None
+            take_profit_id = None
+            
+            for order in oco_order.get('orders', []):
+                if order.get('type') == 'STOP_LOSS_LIMIT':
+                    stop_loss_id = str(order['orderId'])
+                elif order.get('type') == 'LIMIT':
+                    take_profit_id = str(order['orderId'])
+            
+            self.logger.info(f"✅ OCO complet créé - SL: {stop_loss_id}, TP: {take_profit_id}")
+            return stop_loss_id, take_profit_id
+            
+        except Exception as e:
+            self.logger.error(f"❌ OCO complet non supporté pour {symbol}: {e}")
+            return None, None
 
     def round_price(self, symbol: str, price: float) -> float:
         """Arrondit un prix selon les règles de la paire"""
@@ -2141,6 +2260,92 @@ class ScalpingBot:
         except:
             return round(quantity, 6)
     
+    async def update_trailing_stop(self, trade, current_price: float) -> bool:
+        """Met à jour le trailing stop en suivant le prix et crée de nouveaux ordres si nécessaire"""
+        try:
+            symbol = trade.pair
+            
+            # Calculer le profit actuel
+            profit_percent = ((current_price - trade.entry_price) / trade.entry_price) * 100
+            
+            # Vérifier si le trailing stop doit être activé
+            if profit_percent < self.config.TRAILING_ACTIVATION_PERCENT:
+                return False  # Pas encore assez de profit pour activer le trailing
+            
+            # Calculer le nouveau trailing stop
+            trailing_distance = current_price * (self.config.TRAILING_STEP_PERCENT / 100)
+            new_trailing_stop = current_price - trailing_distance
+            
+            # Vérifier si on doit mettre à jour (nouveau stop loss plus élevé)
+            if new_trailing_stop <= trade.trailing_stop:
+                return False  # Pas d'amélioration
+            
+            # Éviter les mises à jour trop fréquentes (minimum 30 secondes)
+            if trade.last_trailing_update:
+                time_since_last = datetime.now() - trade.last_trailing_update
+                if time_since_last.total_seconds() < 30:
+                    return False
+            
+            # Mettre à jour le trailing stop
+            old_trailing_stop = trade.trailing_stop
+            trade.trailing_stop = new_trailing_stop
+            trade.last_trailing_update = datetime.now()
+            
+            self.logger.info(f"📈 Trailing stop mis à jour pour {symbol}:")
+            self.logger.info(f"   💰 Prix actuel: {current_price:.4f} USDC")
+            self.logger.info(f"   📊 Profit: +{profit_percent:.2f}%")
+            self.logger.info(f"   🔄 Ancien trailing: {old_trailing_stop:.4f} USDC")
+            self.logger.info(f"   ✅ Nouveau trailing: {new_trailing_stop:.4f} USDC")
+            
+            # Mettre à jour l'ordre stop loss sur Binance
+            await self.update_binance_stop_loss(trade, new_trailing_stop)
+            
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"❌ Erreur mise à jour trailing stop pour {trade.pair}: {e}")
+            return False
+    
+    async def update_binance_stop_loss(self, trade, new_stop_price: float):
+        """Met à jour l'ordre stop loss sur Binance avec le nouveau prix"""
+        try:
+            symbol = trade.pair
+            quantity = trade.size
+            
+            # Annuler l'ancien ordre stop loss s'il existe
+            if trade.stop_loss_order_id:
+                try:
+                    self.binance_client.cancel_order(symbol=symbol, orderId=trade.stop_loss_order_id)
+                    self.logger.debug(f"🗑️ Ancien stop loss {trade.stop_loss_order_id} annulé")
+                except Exception as e:
+                    self.logger.warning(f"⚠️ Impossible d'annuler ancien stop loss: {e}")
+            
+            # Créer un nouveau stop loss avec le prix mis à jour
+            stop_price = self.round_price(symbol, new_stop_price)
+            limit_price = self.round_price(symbol, stop_price * 0.995)
+            quantity = self.round_quantity(symbol, quantity)
+            
+            # Créer le nouvel ordre
+            new_stop_order = self.binance_client.create_order(
+                symbol=symbol,
+                side='SELL',
+                type='STOP_LOSS_LIMIT',
+                timeInForce='GTC',
+                quantity=quantity,
+                price=limit_price,
+                stopPrice=stop_price
+            )
+            
+            # Mettre à jour l'ID du nouvel ordre
+            trade.stop_loss_order_id = str(new_stop_order['orderId'])
+            trade.stop_loss = new_stop_price  # Mettre à jour aussi le stop loss du trade
+            
+            self.logger.info(f"✅ Stop loss Binance mis à jour: {trade.stop_loss_order_id}")
+            
+        except Exception as e:
+            self.logger.error(f"❌ Erreur mise à jour stop loss Binance: {e}")
+            # En cas d'erreur, on garde l'ancien ordre et on continue la surveillance manuelle
+
     def get_symbol_filters(self, symbol: str) -> dict:
         """Récupère les filtres de trading pour un symbole"""
         try:

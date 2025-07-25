@@ -32,6 +32,13 @@ class TradingConfig:
     TRAILING_ACTIVATION_PERCENT: float = 0.5  # OPTIMISÉ: Activation trailing à +0.5% (plus conservateur)
     TRAILING_STEP_PERCENT: float = 0.2  # Step trailing plus fin
     
+    # 🔥 NOUVEAUX PARAMÈTRES - Ordres automatiques Binance
+    ENABLE_AUTOMATIC_ORDERS: bool = True  # Active la création automatique des ordres SL + TP
+    PREFER_OCO_ORDERS: bool = True  # Préférer les ordres OCO quand possible
+    ENABLE_DYNAMIC_TRAILING: bool = True  # Active le trailing stop dynamique avec mise à jour des ordres
+    AUTO_UPDATE_TAKE_PROFIT: bool = True  # Met à jour automatiquement le TP lors du trailing pour maximiser profits
+    TRAILING_UPDATE_MIN_SECONDS: int = 30  # Minimum de secondes entre mises à jour trailing
+    
     # Paramètres anti-fragmentation - OPTIMISÉS ANTI-SURTRADING
     MIN_TRADE_INTERVAL_SECONDS: int = 120  # OPTIMISÉ: Minimum 2 minutes entre trades
     MAX_TRADES_PER_HOUR: int = 4  # OPTIMISÉ: Maximum 4 trades par heure
