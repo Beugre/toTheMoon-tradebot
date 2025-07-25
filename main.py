@@ -168,6 +168,7 @@ class Trade:
     capital_before: Optional[float] = None  # AJOUTÉ: Capital avant le trade
     capital_after: Optional[float] = None   # AJOUTÉ: Capital après le trade
     db_id: Optional[int] = None
+    stop_loss_order_id: Optional[str] = None  # AJOUTÉ: ID ordre stop loss automatique
 
 @dataclass
 class PairScore:
@@ -419,7 +420,8 @@ class ScalpingBot:
                             stop_loss=float(position_data['stop_loss']),
                             take_profit=float(position_data['take_profit']),
                             trailing_stop=float(position_data.get('trailing_stop', 0)),
-                            timestamp=datetime.fromisoformat(position_data['timestamp'])
+                            timestamp=datetime.fromisoformat(position_data['timestamp']),
+                            stop_loss_order_id=position_data.get('stop_loss_order_id')  # Restaurer l'ID ordre si disponible
                         )
                         
                         # S'assurer que le statut est OPEN
@@ -1397,7 +1399,7 @@ class ScalpingBot:
             trade_id = f"{symbol}_{trade.id}_{int(datetime.now().timestamp())}"
             self.open_positions[trade_id] = trade
 
-            # � CRÉATION D'ORDRES STOP LOSS AUTOMATIQUES BINANCE
+            # 🛑 CRÉATION D'ORDRES STOP LOSS AUTOMATIQUES BINANCE
             try:
                 stop_loss_order_id = await self.create_automatic_stop_loss(trade, symbol, quantity)
                 if stop_loss_order_id:
@@ -1405,8 +1407,29 @@ class ScalpingBot:
                     self.logger.info(f"🛑 Stop Loss automatique créé: {stop_loss_order_id}")
                 else:
                     self.logger.warning(f"⚠️ Impossible de créer stop loss automatique pour {symbol}")
+                    # Initialiser l'attribut même si la création échoue
+                    trade.stop_loss_order_id = None
             except Exception as e:
-                self.logger.error(f"❌ Erreur création stop loss automatique: {e}")
+                # Gestion spécifique du solde insuffisant
+                if "insufficient balance" in str(e).lower():
+                    self.logger.error(f"💰 Solde insuffisant pour stop loss automatique {symbol} - position sera gérée manuellement")
+                    # Envoyer notification Telegram pour attention manuelle
+                    if self.telegram_notifier:
+                        try:
+                            await self.telegram_notifier.send_message(
+                                message=f"⚠️ ATTENTION MANUELLE REQUISE\n\n"
+                                       f"Position: {symbol}\n"
+                                       f"Problème: Solde insuffisant pour stop loss automatique\n"
+                                       f"Action: Surveillance manuelle nécessaire\n"
+                                       f"Stop Loss: {trade.stop_loss:.4f} USDC"
+                            )
+                        except:
+                            pass
+                else:
+                    self.logger.error(f"❌ Erreur création stop loss automatique: {e}")
+                
+                # Toujours initialiser l'attribut
+                trade.stop_loss_order_id = None
 
             # �🔥 Sauvegarde immédiate en Firebase
             try:
@@ -1422,7 +1445,8 @@ class ScalpingBot:
                         'trailing_stop': trailing_stop,
                         'direction': direction.value if hasattr(direction, 'value') else str(direction),
                         'saved_at': datetime.now().isoformat(),
-                        'session_id': self.firebase_logger.session_id
+                        'session_id': self.firebase_logger.session_id,
+                        'stop_loss_order_id': trade.stop_loss_order_id  # Sauvegarder l'ID ordre stop loss
                     }
                     self.firebase_logger.firestore_db.collection('position_states').document(trade_id).set(position_data)
                     self.logger.debug(f"🔥 Position {trade_id} sauvegardée en Firebase")
