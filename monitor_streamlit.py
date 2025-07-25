@@ -182,6 +182,43 @@ class RealTimeTradingMonitor:
             st.error(f"❌ Erreur Firebase: {e}")
             return pd.DataFrame()
 
+    def get_quarantined_trades(self, hours_back: int = 24) -> pd.DataFrame:
+        """Récupère les trades en quarantaine (problème pnl_amount manquant)"""
+        try:
+            end_time = datetime.now()
+            start_time = end_time - timedelta(hours=hours_back)
+            
+            docs = self.firebase_db.collection("quarantined_trades").where(
+                "timestamp", ">=", start_time.isoformat()
+            ).where(
+                "timestamp", "<=", end_time.isoformat()
+            ).order_by("timestamp").limit(1000).stream()
+            
+            quarantined = []
+            for doc in docs:
+                data = doc.to_dict()
+                quarantined.append({
+                    'doc_id': doc.id,
+                    'pair': data.get('pair'),
+                    'timestamp': pd.to_datetime(data.get('timestamp')),
+                    'action': data.get('action'),
+                    'entry_price': float(data.get('entry_price', 0)),
+                    'exit_price': float(data.get('exit_price', 0)),
+                    'size': float(data.get('size', 0)),
+                    'pnl_amount': data.get('pnl_amount'),  # Peut être None
+                    'reason': data.get('reason', 'Unknown'),
+                    'trade_id': data.get('trade_id'),
+                    'binance_order_id': data.get('binance_order_id'),
+                    'trailing_data': data.get('trailing_data', {}),
+                    'strategy': data.get('strategy', 'unknown')
+                })
+            
+            return pd.DataFrame(quarantined) if quarantined else pd.DataFrame()
+            
+        except Exception as e:
+            st.error(f"❌ Erreur Firebase quarantaine: {e}")
+            return pd.DataFrame()
+
     def get_proxy_account_info(self) -> Dict:
         """Récupère les infos compte via le proxy VPS Firebase"""
         try:
@@ -296,11 +333,14 @@ def main():
         # Données Firebase (trades bot)
         firebase_df = monitor.get_recent_firebase_trades(hours_back)
         
+        # Données en quarantaine (problème pnl_amount)
+        quarantined_df = monitor.get_quarantined_trades(hours_back)
+        
         # Infos compte via proxy
         account_info = monitor.get_proxy_account_info()
     
     # Interface principale
-    display_real_time_dashboard(binance_df, binance_aggregated_df, firebase_df, account_info, hours_back)
+    display_real_time_dashboard(binance_df, binance_aggregated_df, firebase_df, quarantined_df, account_info, hours_back)
     
     # Auto-refresh
     if auto_refresh:
@@ -309,7 +349,61 @@ def main():
 
 
 def display_real_time_dashboard(binance_df: pd.DataFrame, binance_aggregated_df: pd.DataFrame, 
-                               firebase_df: pd.DataFrame, account_info: Dict, hours_back: int):
+                               firebase_df: pd.DataFrame, quarantined_df: pd.DataFrame, account_info: Dict, hours_back: int):
+    """Affichage du dashboard temps réel avec analyse quarantaine"""
+    
+    # Métriques principales avec distinction fragmenté/agrégé
+    col1, col2, col3, col4, col5 = st.columns(5)
+    
+    with col1:
+        st.metric("🎯 Trades Binance Bruts", len(binance_df))
+        
+    with col2:
+        st.metric("🎯 Ordres Binance Agrégés", len(binance_aggregated_df))
+        
+    with col3:
+        st.metric("🔥 Trades Firebase (Bot)", len(firebase_df))
+        
+    with col4:
+        # Alerte quarantaine
+        if len(quarantined_df) > 0:
+            st.metric("🚨 Trades Quarantaine", len(quarantined_df), delta=f"-{len(quarantined_df)}")
+        else:
+            st.metric("✅ Trades Quarantaine", "0")
+            
+    with col5:
+        if account_info['balances']:
+            usdc_balance = next((b['total'] for b in account_info['balances'] if b['asset'] == 'USDC'), 0)
+            st.metric("💰 USDC", f"{usdc_balance:.2f}")
+        else:
+            st.metric("💰 USDC", "N/A")
+    
+    # Alertes importantes
+    if len(quarantined_df) > 0:
+        st.error(f"🚨 **{len(quarantined_df)} trades en quarantaine !** Problème de calcul PnL ou trailing stop")
+        
+        # Analyser les raisons de quarantaine
+        if 'reason' in quarantined_df.columns:
+            reasons = quarantined_df['reason'].value_counts()
+            st.write("**Raisons de quarantaine :**")
+            for reason, count in reasons.items():
+                st.write(f"- {reason}: {count} trade(s)")
+    
+    # Status de trading
+    if account_info.get('canTrade'):
+        st.success("✅ Compte autorisé au trading")
+    else:
+        st.error("🚨 Trading désactivé sur le compte")
+    
+    # Graphiques temps réel
+    if not binance_df.empty:
+        display_trading_charts(binance_df, binance_aggregated_df)
+    
+    # Comparaison avec quarantaine
+    display_data_comparison(binance_aggregated_df, firebase_df, quarantined_df, len(binance_df))
+    
+    # Détails des trades avec onglets (incluant quarantaine)
+    display_trade_tables(binance_df, binance_aggregated_df, firebase_df, quarantined_df)
     """Affichage du dashboard temps réel avec comparaison trades fragmentés vs agrégés"""
     
     # Métriques principales avec distinction fragmenté/agrégé
@@ -406,67 +500,83 @@ def display_trading_charts(binance_df: pd.DataFrame, binance_aggregated_df: pd.D
             st.plotly_chart(fig, use_container_width=True)
 
 
-def display_data_comparison(binance_aggregated_df: pd.DataFrame, firebase_df: pd.DataFrame, total_fragments: int):
-    """Comparaison des données proxy VPS vs Firebase bot avec métriques de fragmentation"""
-    st.subheader("🔍 Comparaison Binance (Agrégé) vs Firebase (Bot)")
+def display_data_comparison(binance_aggregated_df: pd.DataFrame, firebase_df: pd.DataFrame, quarantined_df: pd.DataFrame, total_fragments: int):
+    """Comparaison des données avec analyse quarantaine"""
+    st.subheader("🔍 Comparaison Binance vs Firebase + Analyse Quarantaine")
     
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
-        st.metric("Ratio Bot/Binance (Agrégé)", 
-                 f"{len(firebase_df)/max(len(binance_aggregated_df), 1)*100:.1f}%" if len(binance_aggregated_df) > 0 else "N/A")
+        total_bot_trades = len(firebase_df) + len(quarantined_df)
+        st.metric("Total Trades Bot", f"{total_bot_trades} ({len(firebase_df)}+{len(quarantined_df)})")
     
     with col2:
+        if len(binance_aggregated_df) > 0:
+            ratio = total_bot_trades / len(binance_aggregated_df) * 100
+            st.metric("Ratio Bot/Binance", f"{ratio:.1f}%")
+        else:
+            st.metric("Ratio Bot/Binance", "N/A")
+    
+    with col3:
         fragmentation_ratio = total_fragments / max(len(binance_aggregated_df), 1)
         st.metric("Taux Fragmentation", f"{fragmentation_ratio:.1f}x")
     
-    with col3:
-        # Dernière activité Binance (via VPS)
-        if not binance_aggregated_df.empty:
-            last_binance = binance_aggregated_df['time'].max()
-            st.metric("Dernière activité Binance", last_binance.strftime("%H:%M:%S"))
-        else:
-            st.metric("Dernière activité Binance", "Aucune")
-    
     with col4:
-        # Dernière activité Firebase (bot)
-        if not firebase_df.empty:
-            last_firebase = firebase_df['timestamp'].max()
-            st.metric("Dernière activité Bot", last_firebase.strftime("%H:%M:%S"))
+        if len(quarantined_df) > 0:
+            quarantine_rate = len(quarantined_df) / total_bot_trades * 100 if total_bot_trades > 0 else 0
+            st.metric("Taux Quarantaine", f"{quarantine_rate:.1f}%")
         else:
-            st.metric("Dernière activité Bot", "Aucune")
+            st.metric("Taux Quarantaine", "0%")
     
-    # Alertes adaptées à l'agrégation
-    if len(binance_aggregated_df) > 0 and len(firebase_df) == 0:
-        st.error("🚨 Ordres Binance détectés mais aucun log Bot!")
-    elif len(firebase_df) > len(binance_aggregated_df):
-        st.warning("⚠️ Plus de logs Bot que d'ordres Binance (normal si bot très actif)")
-    elif len(binance_aggregated_df) > 0 and len(firebase_df) > 0:
-        ratio = len(firebase_df) / len(binance_aggregated_df)
-        if ratio > 0.8:  # Seuil de correspondance
-            st.success(f"✅ Bonne correspondance Bot/Binance (ratio: {ratio:.2f})")
-        else:
-            st.warning(f"⚠️ Correspondance partielle Bot/Binance (ratio: {ratio:.2f})")
-    
-    # Information pédagogique
-    with st.expander("ℹ️ À propos de l'agrégation"):
-        st.markdown("""
-        **Pourquoi agréger les trades Binance ?**
-        
-        - **Binance** : Retourne des trades fragmentés (plusieurs exécutions par ordre)
-        - **Firebase** : Stocke des trades agrégés (un enregistrement par ordre complet)
-        - **Comparaison** : Nécessite d'agréger les fragments Binance par `orderId`
-        
-        **Métriques :**
-        - `Taux Fragmentation` : Nombre de fragments par ordre moyen
-        - `Ratio Bot/Binance` : Correspondance entre logs bot et ordres réels
-        """)
+    # Analyse détaillée quarantaine
+    if len(quarantined_df) > 0:
+        with st.expander("🔍 Analyse détaillée des trades en quarantaine"):
+            for idx, trade in quarantined_df.iterrows():
+                st.markdown(f"**Trade {idx + 1}: {trade['pair']} - {trade['action']}**")
+                
+                col_a, col_b, col_c, col_d = st.columns(4)
+                with col_a:
+                    st.write(f"Entry: {trade['entry_price']}")
+                with col_b:
+                    st.write(f"Exit: {trade['exit_price']}")
+                with col_c:
+                    st.write(f"Size: {trade['size']}")
+                with col_d:
+                    st.write(f"Raison: {trade['reason']}")
+                
+                # Calculer le PnL manquant
+                if trade['entry_price'] and trade['exit_price'] and trade['size']:
+                    try:
+                        entry = float(trade['entry_price'])
+                        exit_price = float(trade['exit_price'])
+                        size = float(trade['size'])
+                        
+                        if trade['action'] == 'SELL':
+                            calculated_pnl = (exit_price - entry) * size
+                        else:
+                            calculated_pnl = (entry - exit_price) * size
+                        
+                        pnl_percent = (calculated_pnl / (entry * size)) * 100
+                        
+                        if pnl_percent < 0:
+                            st.error(f"💰 PnL calculé: {calculated_pnl:.4f} USDC ({pnl_percent:.2f}%) - **PERTE !**")
+                        else:
+                            st.success(f"💰 PnL calculé: {calculated_pnl:.4f} USDC ({pnl_percent:.2f}%)")
+                            
+                        # Analyser le trailing stop
+                        if 'trailing_data' in trade and trade['trailing_data']:
+                            st.info(f"📈 Trailing data: {trade['trailing_data']}")
+                            
+                    except Exception as e:
+                        st.error(f"❌ Erreur calcul PnL: {e}")
+                
+                st.divider()
 
 
-def display_trade_tables(binance_df: pd.DataFrame, binance_aggregated_df: pd.DataFrame, firebase_df: pd.DataFrame):
-    """Affichage des tables de trades avec distinction fragmenté/agrégé"""
+def display_trade_tables(binance_df: pd.DataFrame, binance_aggregated_df: pd.DataFrame, firebase_df: pd.DataFrame, quarantined_df: pd.DataFrame):
+    """Affichage des tables de trades avec quarantaine"""
     
-    tab1, tab2, tab3 = st.tabs(["🎯 Trades Binance (Bruts)", "🎯 Ordres Binance (Agrégés)", "🔥 Logs Bot Firebase"])
+    tab1, tab2, tab3, tab4 = st.tabs(["🎯 Trades Binance (Bruts)", "🎯 Ordres Binance (Agrégés)", "🔥 Logs Bot Firebase", "🚨 Trades Quarantaine"])
     
     with tab1:
         if not binance_df.empty:
@@ -521,6 +631,58 @@ def display_trade_tables(binance_df: pd.DataFrame, binance_aggregated_df: pd.Dat
             )
         else:
             st.info("ℹ️ Aucun log bot dans la période")
+    
+    with tab4:
+        if not quarantined_df.empty:
+            st.error(f"🚨 {len(quarantined_df)} trades en quarantaine - Nécessitent attention !")
+            
+            # Formatage avec calcul PnL
+            display_quarantined = quarantined_df.copy()
+            display_quarantined['timestamp'] = display_quarantined['timestamp'].dt.strftime('%H:%M:%S')
+            display_quarantined['entry_price'] = display_quarantined['entry_price'].round(2)
+            display_quarantined['exit_price'] = display_quarantined['exit_price'].round(2)
+            
+            # Calculer le PnL manquant
+            calculated_pnl = []
+            calculated_pnl_percent = []
+            
+            for idx, row in display_quarantined.iterrows():
+                try:
+                    entry = float(row['entry_price'])
+                    exit_price = float(row['exit_price'])
+                    size = float(row['size'])
+                    
+                    if row['action'] == 'SELL':
+                        pnl = (exit_price - entry) * size
+                    else:
+                        pnl = (entry - exit_price) * size
+                    
+                    pnl_percent = (pnl / (entry * size)) * 100
+                    calculated_pnl.append(round(pnl, 4))
+                    calculated_pnl_percent.append(round(pnl_percent, 2))
+                except:
+                    calculated_pnl.append(0)
+                    calculated_pnl_percent.append(0)
+            
+            display_quarantined['calculated_pnl'] = calculated_pnl
+            display_quarantined['pnl_percent'] = calculated_pnl_percent
+            
+            st.dataframe(
+                display_quarantined[['timestamp', 'pair', 'action', 'entry_price', 'exit_price', 'size', 'calculated_pnl', 'pnl_percent', 'reason']],
+                use_container_width=True
+            )
+            
+            # Analyser les problèmes de trailing stop
+            btc_trades = display_quarantined[display_quarantined['pair'] == 'BTCUSDC']
+            if not btc_trades.empty:
+                st.error("🚨 **Analyse BTC - Problème Trailing Stop détecté !**")
+                for idx, btc in btc_trades.iterrows():
+                    if btc['pnl_percent'] < 0:
+                        st.write(f"- BTC vendu à {btc['pnl_percent']}% au lieu d'être protégé par trailing stop")
+                        st.write(f"- Trailing data: {btc.get('trailing_data', 'Non disponible')}")
+            
+        else:
+            st.success("✅ Aucun trade en quarantaine - Système fonctionnel !")
 
 
 if __name__ == "__main__":
