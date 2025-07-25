@@ -158,7 +158,7 @@ class RealTimeTradingMonitor:
                 "timestamp", ">=", start_time.isoformat()
             ).where(
                 "timestamp", "<=", end_time.isoformat()
-            ).order_by("timestamp", direction=firestore.Query.DESCENDING).stream()
+            ).order_by("timestamp").limit(1000).stream()
             
             trades = []
             for doc in docs:
